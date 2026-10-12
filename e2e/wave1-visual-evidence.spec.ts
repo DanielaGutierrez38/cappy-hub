@@ -122,7 +122,7 @@ test("Wave 1 Task assignment: capture manager detail and on-demand dialog", asyn
   }
 });
 
-test("Wave 1 Task detail: capture the assigned Officer view", async ({
+test("Wave 1 Task detail: capture the unassigned Officer view", async ({
   page,
 }, testInfo) => {
   await signIn(page, "Officer");
@@ -130,10 +130,16 @@ test("Wave 1 Task detail: capture the assigned Officer view", async ({
   await expect(
     page.getByRole("heading", { name: "Write LinkedIn recap" }),
   ).toBeVisible();
+  await expect(page.getByRole("region", { name: "Officers" })).toContainText(
+    "Your assignment: Not assigned",
+  );
+  await expect(
+    page.getByRole("button", { name: "Assign this task to me" }),
+  ).toBeVisible();
   await expect(page.getByRole("button", { name: "Add officers" })).toHaveCount(
     0,
   );
-  await captureWidths(page, testInfo, "task-officer", true);
+  await captureWidths(page, testInfo, "task-officer-unassigned", true);
 });
 
 test("Wave 1 Event forms: capture create, edit, and recurring schedule states", async ({
