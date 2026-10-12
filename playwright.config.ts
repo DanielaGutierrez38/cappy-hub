@@ -50,7 +50,10 @@ export default defineConfig({
   timeout: 60_000,
   expect: { timeout: 10_000 },
   outputDir: "test-results",
-  reporter: "list",
+  reporter: [
+    ["list"],
+    ["html", { outputFolder: "playwright-report", open: "never" }],
+  ],
   use: {
     baseURL: "http://127.0.0.1:3100",
     browserName: "chromium",

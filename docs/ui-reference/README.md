@@ -4,6 +4,8 @@ Open [`index.html`](index.html) in a browser to browse, filter, and open the ful
 
 This catalog covers the three primary UI roles: Admin, Lead, and Officer. Lead views include both single-branch and multi-branch synthetic accounts because their permitted Event and Task scope depends on branch membership. Shared login and access-denied states are included separately. President and other secondary roles are outside this catalog's scope.
 
+GitHub Actions runs the existing Playwright suite against a disposable Supabase stack seeded with synthetic data. Download the `playwright-evidence-<run id>` artifact from the relevant workflow run to inspect the HTML report and real browser captures. The `test-results/<per-test-folder>/visual-captures/` images are evidence outputs only; CI does not modify or commit the catalog. Review each image, copy selected captures into the corresponding role/domain folder, add matching metadata to `manifest.json`, and regenerate the index and coverage report with the command below.
+
 Every included dark screenshot state has a matching light screenshot for the same role, scope, route, viewport width, and capture mode. The catalog covers 1024, 1280, 1440, and 1920 CSS pixel widths; 1440px is the primary review size. The application is desktop-only.
 
 ## Update the catalog
