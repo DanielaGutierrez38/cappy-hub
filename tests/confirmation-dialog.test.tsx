@@ -36,6 +36,7 @@ import {
   WarningDecisionForm,
 } from "@/app/(protected)/officers/warning-forms";
 import PointActions from "@/app/(protected)/points/point-actions";
+import { PointHistoryState } from "@/app/(protected)/points/point-history-state";
 
 const series = {
   id: 12,
@@ -180,7 +181,11 @@ it("preserves warning decision submit values inside the dialogs", () => {
 
 it("explains that Point transaction removal is logical and retains feedback", () => {
   const pointHtml = renderToStaticMarkup(
-    createElement(PointActions, { transactionId: 8, points: 2 }),
+    createElement(
+      PointHistoryState,
+      { initialAmounts: [{ transactionId: 8, points: 2 }] },
+      createElement(PointActions, { transactionId: 8, points: 2 }),
+    ),
   );
   const feedbackHtml = renderToStaticMarkup(
     createElement("form", null, [
@@ -198,9 +203,10 @@ it("explains that Point transaction removal is logical and retains feedback", ()
   expect(pointHtml).toContain("Remove Point transaction?");
   expect(pointHtml).toContain("marks the Point transaction as removed");
   expect(pointHtml).toContain("The removal is recorded in the System Log.");
-  expect(pointHtml).toContain('<details class="point-edit-disclosure"');
-  expect(pointHtml).toContain(">Edit points</summary>");
-  expect(pointHtml).toContain('name="points"');
+  expect(pointHtml).toContain(
+    'type="button" class="button-secondary">Edit points</button>',
+  );
+  expect(pointHtml).not.toContain('name="points"');
   expect(pointHtml).toContain(">Remove</button>");
   expect(feedbackHtml).toContain('role="status"');
   expect(feedbackHtml).toContain('role="alert"');
