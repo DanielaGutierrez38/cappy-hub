@@ -4,7 +4,10 @@ import { createClient } from "@/lib/supabase/server";
 import { searchOrFilter, literalSearchPattern } from "@/lib/list-search";
 import { listPageUrl } from "@/lib/list-url";
 import { denverTimestamp } from "@/lib/event-time";
-import { presentAuditEntry } from "@/lib/system-log-presentation";
+import {
+  findAuditActionCodes,
+  presentAuditEntry,
+} from "@/lib/system-log-presentation";
 import { systemLogFiltersSchema } from "./filter-validation";
 import Link from "next/link";
 import type { Route } from "next";
@@ -72,8 +75,23 @@ export default async function SystemLogPage({
         query = query.eq("actor_id", actorFilter);
       else if (actorFilter !== undefined)
         query = query.eq("actor_officer_id", actorFilter);
-      if (action)
-        query = query.filter("action", "imatch", literalSearchPattern(action));
+      if (action) {
+        const matchingActions = findAuditActionCodes(action);
+        if (matchingActions.length > 0) {
+          query = query.or(
+            [
+              `action.in.(${matchingActions.join(",")})`,
+              searchOrFilter(action, ["action"]),
+            ].join(","),
+          );
+        } else {
+          query = query.filter(
+            "action",
+            "imatch",
+            literalSearchPattern(action),
+          );
+        }
+      }
       if (entity) query = query.eq("entity_type", entity);
       if (!dateRangeIsReversed && fromBoundary)
         query = query.gte("created_at", fromBoundary);
@@ -92,7 +110,7 @@ export default async function SystemLogPage({
     buildLogQuery(false, true),
     supabase.from("officers").select("id,name").order("name"),
   ]);
-  if (filteredCount.error || visibleCount.error || actorResult.error)
+  if (filteredCount.error || visibleCount.error)
     throw new Error("Failed to load System Log");
 
   const totalPages = Math.max(
@@ -110,7 +128,7 @@ export default async function SystemLogPage({
   if (error) throw new Error(`Failed to load System Log: ${error.message}`);
 
   const officerNames = new Map(
-    actorResult.data.map((officer) => [officer.id, officer.name]),
+    (actorResult.data ?? []).map((officer) => [officer.id, officer.name]),
   );
   const eventIds = new Set<number>();
   const taskIds = new Set<number>();
@@ -174,13 +192,11 @@ export default async function SystemLogPage({
           .in("id", [...taskIds])
       : Promise.resolve({ data: [], error: null }),
   ]);
-  if (eventResult.error || taskResult.error)
-    throw new Error("Failed to load System Log record context");
   const eventNames = new Map(
-    eventResult.data.map((event) => [event.id, event.name]),
+    (eventResult.data ?? []).map((event) => [event.id, event.name]),
   );
   const taskNames = new Map(
-    taskResult.data.map((task) => [task.id, task.title]),
+    (taskResult.data ?? []).map((task) => [task.id, task.title]),
   );
   const eventContext = {
     officerNames,
@@ -211,7 +227,7 @@ export default async function SystemLogPage({
         active={hasFilters}
         clearHref="/system-log"
       >
-        <label className="w-full min-w-0 sm:w-auto sm:min-w-56 sm:flex-1">
+        <label className="min-w-56 flex-1">
           Search log
           <input
             type="search"
@@ -221,29 +237,37 @@ export default async function SystemLogPage({
             placeholder="Action or record ID"
           />
         </label>
-        <label className="w-full min-w-0 sm:w-auto sm:min-w-44">
+        <label className="min-w-44">
           Actor
           <select name="actor" defaultValue={actorFilter ?? ""}>
             <option value="">All actors</option>
             <option value="system">System</option>
-            {actorResult.data.map((officer) => (
+            {typeof actorFilter === "number" &&
+              !(actorResult.data ?? []).some(
+                (officer) => officer.id === actorFilter,
+              ) && (
+                <option value={actorFilter}>
+                  Officer #{actorFilter} (name unavailable)
+                </option>
+              )}
+            {(actorResult.data ?? []).map((officer) => (
               <option key={officer.id} value={officer.id}>
                 {officer.name}
               </option>
             ))}
           </select>
         </label>
-        <label className="w-full min-w-0 sm:w-auto sm:min-w-44">
-          Activity or action code
+        <label className="min-w-44">
+          Activity
           <input
             type="search"
             name="action"
             defaultValue={action}
             maxLength={80}
-            placeholder="e.g. signup or event.cancelled"
+            placeholder="e.g. signed up or cancelled event"
           />
         </label>
-        <label className="w-full min-w-0 sm:w-auto sm:min-w-44">
+        <label className="min-w-44">
           Entity type
           <select name="entity" defaultValue={entity ?? ""}>
             <option value="">All entity types</option>
@@ -263,17 +287,46 @@ export default async function SystemLogPage({
             <option value="warning">Warning</option>
           </select>
         </label>
-        <label className="w-full min-w-0 sm:w-auto sm:min-w-40">
+        <label className="min-w-40">
           From date
-          <input name="from" type="date" defaultValue={fromDate ?? ""} />
+          <input
+            name="from"
+            type="date"
+            defaultValue={fromDate ?? ""}
+            aria-invalid={dateRangeIsReversed || undefined}
+            aria-describedby={
+              dateRangeIsReversed ? "system-log-date-error" : undefined
+            }
+          />
         </label>
-        <label className="w-full min-w-0 sm:w-auto sm:min-w-40">
+        <label className="min-w-40">
           To date
-          <input name="to" type="date" defaultValue={toDate ?? ""} />
+          <input
+            name="to"
+            type="date"
+            defaultValue={toDate ?? ""}
+            aria-invalid={dateRangeIsReversed || undefined}
+            aria-describedby={
+              dateRangeIsReversed ? "system-log-date-error" : undefined
+            }
+          />
         </label>
       </ListFilterBar>
       {dateRangeIsReversed && (
-        <p role="status">Choose a From date on or before the To date.</p>
+        <p id="system-log-date-error" role="alert">
+          Choose a From date on or before the To date.
+        </p>
+      )}
+      {actorResult.error && (
+        <p role="alert">
+          Officer names are unavailable. Reload this page to retry. Log entries
+          remain available.
+        </p>
+      )}
+      {(eventResult.error || taskResult.error) && (
+        <p role="alert">
+          Some record names are unavailable. Reload this page to retry.
+        </p>
       )}
       {entries.length === 0 ? (
         <p>{emptyMessage}</p>
@@ -320,33 +373,42 @@ export default async function SystemLogPage({
                       )}
                     </td>
                     <td>
-                      {presentation.changes.length === 0 ? (
+                      {presentation.changes.length === 0 && (
                         <p>{presentation.detailSummary}</p>
-                      ) : (
-                        <ul className="mt-1 space-y-1 text-xs text-muted">
-                          {presentation.changes.map((change) => (
-                            <li key={change.label}>
-                              {change.label}: {change.value}
-                            </li>
-                          ))}
-                        </ul>
                       )}
-                      <details className="mt-1 text-xs text-muted">
-                        <summary className="min-h-11 cursor-pointer">
-                          Technical details
-                        </summary>
-                        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-                          <dt>Action</dt>
-                          <dd>{entry.action}</dd>
-                          <dt>Entity type</dt>
-                          <dd>{entry.entity_type}</dd>
-                          <dt>Entity ID</dt>
-                          <dd>{entry.entity_id}</dd>
-                        </dl>
-                        <pre className="mt-2 max-w-md overflow-x-auto whitespace-pre-wrap">
-                          {JSON.stringify(entry.details, null, 2)}
-                        </pre>
-                      </details>
+                      <div className="flex flex-wrap items-center gap-x-3">
+                        {presentation.changes.length > 0 && (
+                          <details className="max-w-full text-xs text-muted">
+                            <summary className="min-h-10 cursor-pointer">
+                              {presentation.changes.length} change
+                              {presentation.changes.length === 1 ? "" : "s"}
+                            </summary>
+                            <ul className="mt-1 space-y-1">
+                              {presentation.changes.map((change) => (
+                                <li key={change.label}>
+                                  {change.label}: {change.value}
+                                </li>
+                              ))}
+                            </ul>
+                          </details>
+                        )}
+                        <details className="max-w-full text-xs text-muted">
+                          <summary className="min-h-10 cursor-pointer">
+                            Technical details
+                          </summary>
+                          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+                            <dt>Action</dt>
+                            <dd>{entry.action}</dd>
+                            <dt>Entity type</dt>
+                            <dd>{entry.entity_type}</dd>
+                            <dt>Entity ID</dt>
+                            <dd>{entry.entity_id}</dd>
+                          </dl>
+                          <pre className="mt-2 max-w-md overflow-x-auto whitespace-pre-wrap">
+                            {JSON.stringify(entry.details, null, 2)}
+                          </pre>
+                        </details>
+                      </div>
                     </td>
                   </tr>
                 );

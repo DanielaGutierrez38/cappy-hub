@@ -79,16 +79,19 @@ export type Database = {
         Row: {
           created_at: string;
           id: number;
+          is_active: boolean;
           name: string;
         };
         Insert: {
           created_at?: string;
           id?: number;
+          is_active?: boolean;
           name: string;
         };
         Update: {
           created_at?: string;
           id?: number;
+          is_active?: boolean;
           name?: string;
         };
         Relationships: [];
@@ -266,6 +269,49 @@ export type Database = {
         };
         Relationships: [];
       };
+      event_waitlist: {
+        Row: {
+          event_id: number;
+          id: number;
+          joined_at: string;
+          officer_id: number;
+        };
+        Insert: {
+          event_id: number;
+          id?: number;
+          joined_at?: string;
+          officer_id: number;
+        };
+        Update: {
+          event_id?: number;
+          id?: number;
+          joined_at?: string;
+          officer_id?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "event_waitlist_event_id_fkey";
+            columns: ["event_id"];
+            isOneToOne: false;
+            referencedRelation: "events";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "event_waitlist_officer_id_fkey";
+            columns: ["officer_id"];
+            isOneToOne: false;
+            referencedRelation: "officer_point_totals";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "event_waitlist_officer_id_fkey";
+            columns: ["officer_id"];
+            isOneToOne: false;
+            referencedRelation: "officers";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
       events: {
         Row: {
           created_at: string;
@@ -279,11 +325,13 @@ export type Database = {
           id: number;
           location: string | null;
           location_id: number | null;
+          max_volunteers: number | null;
           meeting_notes_url: string | null;
           name: string;
           participation_points_per_hour_at_end: number | null;
           recurrence_key: string | null;
           recurrence_series_id: number | null;
+          signup_sheet_url: string | null;
           slides_url: string | null;
           starts_at: string;
           status: string;
@@ -300,11 +348,13 @@ export type Database = {
           id?: number;
           location?: string | null;
           location_id?: number | null;
+          max_volunteers?: number | null;
           meeting_notes_url?: string | null;
           name: string;
           participation_points_per_hour_at_end?: number | null;
           recurrence_key?: string | null;
           recurrence_series_id?: number | null;
+          signup_sheet_url?: string | null;
           slides_url?: string | null;
           starts_at: string;
           status?: string;
@@ -321,11 +371,13 @@ export type Database = {
           id?: number;
           location?: string | null;
           location_id?: number | null;
+          max_volunteers?: number | null;
           meeting_notes_url?: string | null;
           name?: string;
           participation_points_per_hour_at_end?: number | null;
           recurrence_key?: string | null;
           recurrence_series_id?: number | null;
+          signup_sheet_url?: string | null;
           slides_url?: string | null;
           starts_at?: string;
           status?: string;
@@ -412,6 +464,8 @@ export type Database = {
           officer_id: number;
           reason: string;
           status: string;
+          voided_at: string | null;
+          voided_by: number | null;
         };
         Insert: {
           created_at?: string;
@@ -419,6 +473,8 @@ export type Database = {
           officer_id: number;
           reason: string;
           status?: string;
+          voided_at?: string | null;
+          voided_by?: number | null;
         };
         Update: {
           created_at?: string;
@@ -426,6 +482,8 @@ export type Database = {
           officer_id?: number;
           reason?: string;
           status?: string;
+          voided_at?: string | null;
+          voided_by?: number | null;
         };
         Relationships: [
           {
@@ -438,6 +496,20 @@ export type Database = {
           {
             foreignKeyName: "officer_warnings_officer_id_fkey";
             columns: ["officer_id"];
+            isOneToOne: false;
+            referencedRelation: "officers";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "officer_warnings_voided_by_fkey";
+            columns: ["voided_by"];
+            isOneToOne: false;
+            referencedRelation: "officer_point_totals";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "officer_warnings_voided_by_fkey";
+            columns: ["voided_by"];
             isOneToOne: false;
             referencedRelation: "officers";
             referencedColumns: ["id"];
@@ -621,18 +693,24 @@ export type Database = {
       };
       positions: {
         Row: {
+          code: string | null;
           created_at: string;
           id: number;
+          is_active: boolean;
           name: string;
         };
         Insert: {
+          code?: string | null;
           created_at?: string;
           id?: number;
+          is_active?: boolean;
           name: string;
         };
         Update: {
+          code?: string | null;
           created_at?: string;
           id?: number;
+          is_active?: boolean;
           name?: string;
         };
         Relationships: [];
@@ -699,81 +777,34 @@ export type Database = {
           },
         ];
       };
-      task_assignments: {
+      task_events: {
         Row: {
-          approved_at: string | null;
-          approved_by: number | null;
-          assigned_at: string;
-          assigned_by: number;
-          completed_at: string | null;
-          officer_id: number;
+          created_at: string;
+          event_id: number;
           task_id: number;
         };
         Insert: {
-          approved_at?: string | null;
-          approved_by?: number | null;
-          assigned_at?: string;
-          assigned_by: number;
-          completed_at?: string | null;
-          officer_id: number;
+          created_at?: string;
+          event_id: number;
           task_id: number;
         };
         Update: {
-          approved_at?: string | null;
-          approved_by?: number | null;
-          assigned_at?: string;
-          assigned_by?: number;
-          completed_at?: string | null;
-          officer_id?: number;
+          created_at?: string;
+          event_id?: number;
           task_id?: number;
         };
         Relationships: [
           {
-            foreignKeyName: "task_assignments_approved_by_fkey";
-            columns: ["approved_by"];
+            foreignKeyName: "task_events_event_id_fkey";
+            columns: ["event_id"];
             isOneToOne: false;
-            referencedRelation: "officer_point_totals";
+            referencedRelation: "events";
             referencedColumns: ["id"];
           },
           {
-            foreignKeyName: "task_assignments_approved_by_fkey";
-            columns: ["approved_by"];
-            isOneToOne: false;
-            referencedRelation: "officers";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "task_assignments_assigned_by_fkey";
-            columns: ["assigned_by"];
-            isOneToOne: false;
-            referencedRelation: "officer_point_totals";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "task_assignments_assigned_by_fkey";
-            columns: ["assigned_by"];
-            isOneToOne: false;
-            referencedRelation: "officers";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "task_assignments_officer_id_fkey";
-            columns: ["officer_id"];
-            isOneToOne: false;
-            referencedRelation: "officer_point_totals";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "task_assignments_officer_id_fkey";
-            columns: ["officer_id"];
-            isOneToOne: false;
-            referencedRelation: "officers";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "task_assignments_task_id_fkey";
+            foreignKeyName: "task_events_task_id_fkey";
             columns: ["task_id"];
-            isOneToOne: true;
+            isOneToOne: false;
             referencedRelation: "tasks";
             referencedColumns: ["id"];
           },
@@ -1194,11 +1225,6 @@ export type Database = {
         };
         Returns: undefined;
       };
-      approve_task: { Args: { p_task_id: number }; Returns: undefined };
-      assign_task: {
-        Args: { p_officer_id: number; p_task_id: number };
-        Returns: undefined;
-      };
       bulk_add_event_officers: {
         Args: { p_event_id: number; p_officer_ids: number[] };
         Returns: Json;
@@ -1225,12 +1251,47 @@ export type Database = {
         Args: Record<PropertyKey, never>;
         Returns: number;
       };
-      complete_task: { Args: { p_task_id: number }; Returns: undefined };
       create_branch: { Args: { p_name: string }; Returns: number };
       create_event_location: { Args: { p_name: string }; Returns: number };
       create_event_type: { Args: { p_name: string }; Returns: number };
       create_position: { Args: { p_name: string }; Returns: number };
-      create_recurring_event: {
+      create_recurring_event:
+        | {
+            Args: {
+              p_branch_ids: number[];
+              p_description: string;
+              p_ends_at: string[];
+              p_event_dates: string[];
+              p_event_type_id: number;
+              p_location: string;
+              p_meeting_notes_url: string;
+              p_name: string;
+              p_recurrence_rule: string;
+              p_request_key: string;
+              p_slides_url: string;
+              p_starts_at: string[];
+            };
+            Returns: number;
+          }
+        | {
+            Args: {
+              p_branch_ids: number[];
+              p_description: string;
+              p_ends_at: string[];
+              p_event_dates: string[];
+              p_event_type_id: number;
+              p_location: string;
+              p_meeting_notes_url: string;
+              p_name: string;
+              p_recurrence_rule: string;
+              p_request_key: string;
+              p_signup_sheet_url: string;
+              p_slides_url: string;
+              p_starts_at: string[];
+            };
+            Returns: number;
+          };
+      create_recurring_event_with_capacity: {
         Args: {
           p_branch_ids: number[];
           p_description: string;
@@ -1238,10 +1299,12 @@ export type Database = {
           p_event_dates: string[];
           p_event_type_id: number;
           p_location: string;
+          p_max_volunteers: number;
           p_meeting_notes_url: string;
           p_name: string;
           p_recurrence_rule: string;
           p_request_key: string;
+          p_signup_sheet_url: string;
           p_slides_url: string;
           p_starts_at: string[];
         };
@@ -1253,6 +1316,21 @@ export type Database = {
           p_branch_id: number;
           p_description: string;
           p_due_dates: string[];
+          p_points: number;
+          p_recurrence_rule: string;
+          p_request_key: string;
+          p_task_type: string;
+          p_title: string;
+        };
+        Returns: number;
+      };
+      create_recurring_task_with_events: {
+        Args: {
+          p_approval_required: boolean;
+          p_branch_id: number;
+          p_description: string;
+          p_due_dates: string[];
+          p_event_ids: number[];
           p_points: number;
           p_recurrence_rule: string;
           p_request_key: string;
@@ -1274,6 +1352,18 @@ export type Database = {
       delete_event_type: { Args: { p_id: number }; Returns: undefined };
       delete_position: { Args: { p_id: number }; Returns: undefined };
       delete_warning: { Args: { p_warning_id: number }; Returns: undefined };
+      event_signup_counts: {
+        Args: Record<PropertyKey, never>;
+        Returns: {
+          confirmed_count: number;
+          event_id: number;
+          waitlist_count: number;
+        }[];
+      };
+      leave_event_waitlist: {
+        Args: { p_event_id: number; p_officer_id: number };
+        Returns: undefined;
+      };
       mutate_recurring_event: {
         Args: {
           p_dates?: string[];
@@ -1288,9 +1378,40 @@ export type Database = {
         };
         Returns: number;
       };
+      mutate_recurring_event_with_capacity: {
+        Args: {
+          p_capacity_changed?: boolean;
+          p_dates?: string[];
+          p_max_volunteers?: number;
+          p_operation: string;
+          p_patch?: Json;
+          p_request_key: string;
+          p_revision: number;
+          p_rule?: string;
+          p_scope: string;
+          p_selected_id: number;
+          p_series_id: number;
+        };
+        Returns: number;
+      };
       mutate_recurring_task: {
         Args: {
           p_dates?: string[];
+          p_operation: string;
+          p_patch?: Json;
+          p_request_key: string;
+          p_revision: number;
+          p_rule?: string;
+          p_scope: string;
+          p_selected_id: number;
+          p_series_id: number;
+        };
+        Returns: number;
+      };
+      mutate_recurring_task_with_events: {
+        Args: {
+          p_dates?: string[];
+          p_event_ids?: number[];
           p_operation: string;
           p_patch?: Json;
           p_request_key: string;
@@ -1333,15 +1454,25 @@ export type Database = {
         Returns: undefined;
       };
       restore_event: { Args: { p_event_id: number }; Returns: undefined };
-      save_event: {
+      restore_event_archive: {
+        Args: { p_event_id: number };
+        Returns: undefined;
+      };
+      restore_task: { Args: { p_task_id: number }; Returns: undefined };
+      save_event_with_capacity: {
         Args: {
           p_branch_ids: number[];
           p_description: string;
           p_ends_at: string;
+          p_event_date: string;
           p_event_id?: number;
           p_event_type_id: number;
           p_location: string;
+          p_max_volunteers?: number;
+          p_meeting_notes_url?: string;
           p_name: string;
+          p_signup_sheet_url: string;
+          p_slides_url?: string;
           p_starts_at: string;
         };
         Returns: number;
@@ -1357,6 +1488,23 @@ export type Database = {
           p_location: string;
           p_meeting_notes_url?: string;
           p_name: string;
+          p_slides_url?: string;
+          p_starts_at: string;
+        };
+        Returns: number;
+      };
+      save_event_with_signup_sheet: {
+        Args: {
+          p_branch_ids: number[];
+          p_description: string;
+          p_ends_at: string;
+          p_event_date: string;
+          p_event_id?: number;
+          p_event_type_id: number;
+          p_location: string;
+          p_meeting_notes_url?: string;
+          p_name: string;
+          p_signup_sheet_url: string;
           p_slides_url?: string;
           p_starts_at: string;
         };
@@ -1387,18 +1535,43 @@ export type Database = {
         };
         Returns: number;
       };
+      save_task_with_events: {
+        Args: {
+          p_approval_required: boolean;
+          p_branch_id: number;
+          p_description: string;
+          p_due_date: string;
+          p_event_ids: number[];
+          p_points: number;
+          p_task_type: string;
+          p_title: string;
+        };
+        Returns: number;
+      };
       self_assign_task: { Args: { p_task_id: number }; Returns: undefined };
+      set_branch_active: {
+        Args: { p_id: number; p_is_active: boolean };
+        Returns: undefined;
+      };
       set_officer_application_role: {
         Args: { p_officer_id: number; p_role: string };
         Returns: undefined;
       };
       set_participation_rate: { Args: { p_rate: number }; Returns: undefined };
+      set_position_active: {
+        Args: { p_id: number; p_is_active: boolean };
+        Returns: undefined;
+      };
       set_presenter_slots: {
         Args: { p_difficulties: string[]; p_event_id: number };
         Returns: undefined;
       };
       set_task_assignment_completion: {
         Args: { p_completed: boolean; p_officer_id: number; p_task_id: number };
+        Returns: undefined;
+      };
+      set_task_event_links: {
+        Args: { p_event_ids: number[]; p_task_ids: number[] };
         Returns: undefined;
       };
       update_point_transaction: {
@@ -1426,6 +1599,20 @@ export type Database = {
         };
         Returns: undefined;
       };
+      update_task_details_with_events: {
+        Args: {
+          p_branch_id: number;
+          p_description: string;
+          p_due_date: string;
+          p_event_ids: number[];
+          p_points: number;
+          p_task_id: number;
+          p_task_type: string;
+          p_title: string;
+        };
+        Returns: undefined;
+      };
+      void_warning: { Args: { p_warning_id: number }; Returns: undefined };
     };
     Enums: {
       [_ in never]: never;

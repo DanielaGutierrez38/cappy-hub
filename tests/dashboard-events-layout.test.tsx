@@ -53,10 +53,12 @@ const upcoming: Pick<
   | "status"
   | "deleted_at"
   | "participation_points_per_hour_at_end"
+  | "max_volunteers"
 > & {
   event_types: { name: string };
   event_branches: { branches: { name: string } }[];
   event_officers: { officer_id: number }[];
+  event_waitlist?: { officer_id: number }[];
 } = {
   id: 1,
   name: "Participating event",
@@ -66,9 +68,11 @@ const upcoming: Pick<
   status: "upcoming",
   deleted_at: null,
   participation_points_per_hour_at_end: null,
+  max_volunteers: null,
   event_types: { name: "Meeting" },
   event_branches: [],
   event_officers: [{ officer_id: 8 }],
+  event_waitlist: [],
 };
 let events: (typeof upcoming)[];
 let transactions: {
@@ -167,16 +171,28 @@ beforeEach(() => {
   ];
   vi.mocked(requireCurrentOfficer).mockResolvedValue(actor as never);
   vi.mocked(getAuthorizationContext).mockResolvedValue(actor as never);
-  vi.mocked(createClient).mockResolvedValue({ from } as never);
+  vi.mocked(createClient).mockResolvedValue({
+    from,
+    rpc: async () => ({
+      data: events.map((event) => ({
+        event_id: event.id,
+        confirmed_count: event.event_officers.length,
+        waitlist_count: event.event_waitlist?.length ?? 0,
+      })),
+      error: null,
+    }),
+  } as never);
 });
 const renderEvents = async () =>
   renderToStaticMarkup(await EventsPage({ searchParams: Promise.resolve({}) }));
 
 it("groups relationships into distinct sections from the filtered event query", async () => {
   const html = await renderEvents();
-  const your = html.split('aria-label="Your events"')[1].split("</section>")[0];
+  const your = html
+    .split('aria-label="Upcoming Events — Your events"')[1]
+    .split("</section>")[0];
   const other = html
-    .split('aria-label="Other events"')[1]
+    .split('aria-label="Upcoming Events — Other events"')[1]
     .split("</section>")[0];
   expect(your).toContain("Participating event");
   expect(your).not.toContain("Available event");
@@ -275,7 +291,7 @@ it("preserves all three summary metric values and the existing summary/activity 
     ["single", []],
   ]);
   expect(operations("events")).toEqual([
-    ["select", ["*,event_officers(officer_id)"]],
+    ["select", ["*,event_officers(officer_id),event_waitlist(officer_id)"]],
     ["neq", ["status", "cancelled"]],
     ["is", ["deleted_at", null]],
     ["gt", ["starts_at", expect.any(String)]],
@@ -311,7 +327,7 @@ it("places the single sign out form and officer context inside the protected hea
   expect(header).toContain("Local Officer");
   expect(html.match(/Sign out/g)).toHaveLength(1);
   expect(html.split("</header>")[1].split("<script>")[0]).toBe(
-    '<div class="protected-page-width">Page content</div>',
+    '<main id="main-content" tabindex="-1" class="protected-page-width">Page content</main>',
   );
   expect(header).toContain('aria-current="page"');
   expect(header).not.toContain(">Admin</a>");

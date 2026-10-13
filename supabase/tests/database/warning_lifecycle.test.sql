@@ -36,6 +36,26 @@ select is((select approver_officer_id from warning_approvals a
   join officer_warnings w on w.id=a.warning_id
   where w.reason='First warning' and a.approver_id='00000000-0000-4000-8000-000000000902'),
   -902::bigint,'current warning snapshot writes the stable approver Officer ID');
+reset role;
+update positions set name='Club President' where code='president';
+insert into positions(name) values('President');
+insert into auth.users(id,email) values
+  ('00000000-0000-4000-8000-000000000908','pr9-deceptive-president@example.org');
+insert into officers(id,name,utep_email,position_id,application_role,status,auth_user_id)
+values (-909,'Deceptive President','pr9-deceptive-president@example.org',
+  (select id from positions where name='President' and code is null),
+  'officer','active','00000000-0000-4000-8000-000000000908');
+set local role authenticated;
+select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000000901',true);
+select lives_ok($$select create_warning(-905,'Renamed approver identity')$$,
+  'warning creation recognizes the renamed baseline President');
+reset role;
+select is((select count(*) from warning_approvals a join officer_warnings w on w.id=a.warning_id
+  where w.reason='Renamed approver identity'),3::bigint,
+  'warning approvers still include the three baseline executives after a label change');
+select is((select count(*) from warning_approvals a join officer_warnings w on w.id=a.warning_id
+  where w.reason='Renamed approver identity' and a.approver_id='00000000-0000-4000-8000-000000000908'),
+  0::bigint,'custom Position named President is not a warning approver');
 select set_config('test.first_warning_id',
   (select id::text from officer_warnings where reason='First warning'),true);
 set local role authenticated;
@@ -169,24 +189,70 @@ select is((select count(*) from officer_warnings),1::bigint,
   'assigned officer sees only own approved warning');
 reset role;
 
--- Deletion retains the complete snapshot outside the deleted source rows.
+-- Voiding preserves source rows and approval snapshots while removing the
+-- warning from active Officer visibility and totals.
 select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000000906',true);
 set local role authenticated;
+select throws_ok($$select void_warning((select id from public.officer_warnings
+  where reason='Approved warning'))$$,'P0001','Admin required',
+  'normal officer cannot void');
 select throws_ok($$select delete_warning((select id from public.officer_warnings
   where reason='Approved warning'))$$,'P0001','Admin required',
-  'normal officer cannot delete');
+  'normal officer cannot use the compatibility deletion RPC');
+select throws_ok($$delete from public.officer_warnings where reason='Approved warning'$$,
+  '42501','permission denied for table officer_warnings',
+  'normal officer cannot physically delete warning history');
 select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000000903',true);
 select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000000901',true);
-select lives_ok($$select delete_warning((select id from public.officer_warnings
-  where reason='Approved warning'))$$,'admin deletes warning');
+select lives_ok($$select void_warning((select id from public.officer_warnings
+  where reason='Approved warning'))$$,'admin voids warning');
 reset role;
-select is((select pg_catalog.jsonb_array_length(details->'approvers')
-  from audit_logs where action='warning.deleted'),2,
-  'deletion audit retains every approver');
+select is((select count(*) from public.officer_warnings
+  where reason='Approved warning' and status='approved' and voided_at is not null
+    and voided_by=-901),1::bigint,'void preserves warning status and attributes actor');
+select is((select count(*) from public.warning_approvals a join public.officer_warnings w
+  on w.id=a.warning_id where w.reason='Approved warning'),2::bigint,
+  'void preserves every approval row');
+select is((select count(*) from audit_logs where action='warning.voided'
+  and details->>'previous_status'='approved' and details->>'actor_officer_id'='-901'),
+  1::bigint,'void action is audited with previous status and stable actor');
 select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000000901',true);
 set local role authenticated;
+select throws_ok($$select void_warning(current_setting('test.approved_warning_id')::bigint)$$,
+  'P0001','Warning is already voided','repeat void fails');
 select throws_ok($$select delete_warning(current_setting('test.approved_warning_id')::bigint)$$,
-  'P0001','Warning not found','repeat deletion fails');
+  'P0001','Warning deletion is disabled; void instead',
+  'Admin compatibility RPC clearly rejects warning deletion');
+select throws_ok($$delete from public.officer_warnings
+  where id=current_setting('test.approved_warning_id')::bigint$$,
+  '42501','permission denied for table officer_warnings',
+  'Admin cannot physically delete warning history');
+select is((select count(*) from public.officer_warnings
+  where id=current_setting('test.approved_warning_id')::bigint),1::bigint,
+  'Admin can explicitly inspect voided history');
+reset role;
+select set_config('test.pending_warning_id',
+  (select id::text from public.officer_warnings where reason='VP target'),true);
+select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000000901',true);
+set local role authenticated;
+select lives_ok($$select void_warning(current_setting('test.pending_warning_id')::bigint)$$,
+  'admin can void a pending warning');
+reset role;
+select is((select count(*) from public.warning_approvals
+  where warning_id=current_setting('test.pending_warning_id')::bigint),2::bigint,
+  'voiding a pending warning preserves all decision rows');
+select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000000902',true);
+set local role authenticated;
+select throws_ok($$select decide_warning(current_setting('test.pending_warning_id')::bigint,'approved')$$,
+  'P0001','This warning is voided','voided warning cannot receive decisions');
+reset role;
+select is((select count(*) from public.officer_warnings
+  where officer_id=-905 and status='approved' and voided_at is null),0::bigint,
+  'voided approved warning no longer counts toward the threshold');
+select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000000905',true);
+set local role authenticated;
+select is((select count(*) from public.officer_warnings where officer_id=-905),0::bigint,
+  'assigned Officer cannot see voided approved warnings');
 reset role;
 
 -- The review flag is derived from approved count; it never mutates access.
@@ -206,7 +272,8 @@ set local role authenticated;
 select lives_ok($$select decide_warning(id,'approved') from public.officer_warnings
   where reason like 'Review %'$$,'second VP approves review warnings');
 reset role;
-select is((select count(*) from officer_warnings where officer_id=-905 and status='approved'),
+select is((select count(*) from officer_warnings
+  where officer_id=-905 and status='approved' and voided_at is null),
   3::bigint,'three approved warnings yield admin-review threshold');
 select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000000905',true);
 set local role authenticated;

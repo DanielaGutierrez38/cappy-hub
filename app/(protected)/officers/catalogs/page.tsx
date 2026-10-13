@@ -9,8 +9,8 @@ export default async function OfficerCatalogsPage() {
   if (!isAdmin(actor)) notFound();
   const supabase = await createClient();
   const [positions, branches, locations] = await Promise.all([
-    supabase.from("positions").select("id,name").order("name"),
-    supabase.from("branches").select("id,name").order("name"),
+    supabase.from("positions").select("id,name,code,is_active").order("name"),
+    supabase.from("branches").select("id,name,is_active").order("name"),
     supabase.from("event_locations").select("id,name").order("name"),
   ]);
   if (positions.error || branches.error || locations.error)
@@ -22,24 +22,30 @@ export default async function OfficerCatalogsPage() {
         description="Manage officer positions, branches and reusable Event locations."
       />
       <p className="text-sm text-muted">
-        The six baseline positions are required. Referenced records cannot be
-        deleted. Renaming retains their IDs and relationships.
+        The six baseline positions are required. Retired branches and custom
+        positions remain readable in history but cannot be newly assigned.
+        Referenced records cannot be deleted; renaming and retirement retain
+        their IDs and relationships.
       </p>
-      <CatalogManager
-        catalog="position"
-        title="Positions"
-        records={positions.data}
-      />
-      <CatalogManager
-        catalog="branch"
-        title="Branches"
-        records={branches.data}
-      />
-      <CatalogManager
-        catalog="event_location"
-        title="Event locations"
-        records={locations.data}
-      />
+      <div className="space-y-6">
+        <CatalogManager
+          catalog="position"
+          title="Positions"
+          records={positions.data}
+        />
+        <div className="grid grid-cols-1 gap-x-8 gap-y-6 xl:grid-cols-2">
+          <CatalogManager
+            catalog="branch"
+            title="Branches"
+            records={branches.data}
+          />
+          <CatalogManager
+            catalog="event_location"
+            title="Event locations"
+            records={locations.data}
+          />
+        </div>
+      </div>
     </div>
   );
 }

@@ -33,3 +33,20 @@ it("does not show the obsolete upcoming-only Event edit message", () => {
     "This event cannot be edited",
   );
 });
+
+it("explains when an archived or cancelled Event cannot be newly linked", () => {
+  expect(
+    mutationError("Archived or cancelled Events cannot be newly linked"),
+  ).toBe("Archived or cancelled Events cannot be newly linked");
+});
+
+it("maps duplicate primary Event awards to a clear domain message", () => {
+  expect(
+    mutationError(
+      'duplicate key value violates unique constraint "one_active_primary_event_award_per_officer"',
+    ),
+  ).toBe("This Officer already has an active award for this Event.");
+  expect(
+    mutationError("This Officer already has an active award for this Event."),
+  ).toBe("This Officer already has an active award for this Event.");
+});

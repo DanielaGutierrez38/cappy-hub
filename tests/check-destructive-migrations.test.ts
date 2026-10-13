@@ -2,16 +2,30 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const guardPath = resolve("scripts/check-destructive-migrations.mjs");
-const workdirs: string[] = [];
+let workdir: string;
+let baseSha: string;
 
-afterEach(() => {
-  for (const workdir of workdirs.splice(0)) {
-    rmSync(workdir, { recursive: true, force: true });
-  }
+beforeAll(() => {
+  workdir = mkdtempSync(join(tmpdir(), "cappy-migration-guard-"));
+  runGit(["init", "-b", "main"]);
+  runGit(["config", "user.name", "Migration guard tests"]);
+  runGit(["config", "user.email", "migration-guard@example.org"]);
+
+  const oldMigration = join(
+    workdir,
+    "supabase/migrations/20200101000000_legacy.sql",
+  );
+  mkdirSync(join(workdir, "supabase/migrations"), { recursive: true });
+  writeFileSync(oldMigration, "drop table public.old_events;\n");
+  runGit(["add", "supabase/migrations"]);
+  runGit(["commit", "-m", "base"]);
+  baseSha = runGit(["rev-parse", "HEAD"]).toString().trim();
 });
+
+afterAll(() => rmSync(workdir, { recursive: true, force: true }));
 
 describe("new migration destructive-operation guard", () => {
   it.each([
@@ -126,28 +140,8 @@ alter table public.events drop column location;`,
 });
 
 function runGuard(files: Record<string, string>) {
-  const workdir = mkdtempSync(join(tmpdir(), "cappy-migration-guard-"));
-  workdirs.push(workdir);
-  execFileSync("git", ["init", "-b", "main"], { cwd: workdir });
-  execFileSync("git", ["config", "user.name", "Migration guard tests"], {
-    cwd: workdir,
-  });
-  execFileSync("git", ["config", "user.email", "migration-guard@example.org"], {
-    cwd: workdir,
-  });
-
-  const oldMigration = join(
-    workdir,
-    "supabase/migrations/20200101000000_legacy.sql",
-  );
-  mkdirSync(join(workdir, "supabase/migrations"), { recursive: true });
-  writeFileSync(oldMigration, "drop table public.old_events;\n");
-  execFileSync("git", ["add", "supabase/migrations"], { cwd: workdir });
-  execFileSync("git", ["commit", "-m", "base"], { cwd: workdir });
-  const baseSha = execFileSync("git", ["rev-parse", "HEAD"], {
-    cwd: workdir,
-    encoding: "utf8",
-  }).trim();
+  runGit(["reset", "--hard", baseSha]);
+  runGit(["clean", "-fd"]);
 
   for (const [path, contents] of Object.entries(files)) {
     const target = join(workdir, path);
@@ -161,4 +155,8 @@ function runGuard(files: Record<string, string>) {
     env: { ...process.env, GITHUB_BASE_SHA: baseSha },
     encoding: "utf8",
   });
+}
+
+function runGit(args: string[]) {
+  return execFileSync("git", args, { cwd: workdir });
 }

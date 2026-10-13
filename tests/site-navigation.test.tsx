@@ -11,6 +11,24 @@ vi.mock("next/navigation", () => ({
 
 import SiteNavigation from "@/components/site-navigation";
 
+it("renders the CIC mark decoratively inside the Cappy Hub home link", () => {
+  const html = renderToStaticMarkup(
+    <SiteNavigation isAdmin={false} account={<span>Officer</span>} />,
+  );
+
+  expect(html).toMatch(
+    /<a[^>]*href="\/"[^>]*><img[^>]*alt=""[^>]*aria-hidden="true"[^>]*favicon\.ico[^>]*\/><span[^>]*>Cappy Hub<\/span><\/a>/,
+  );
+  expect(
+    html.match(
+      /<a[^>]*href="\/"[^>]*><img[^>]*alt=""[^>]*aria-hidden="true"[^>]*favicon\.ico[^>]*\/><span[^>]*>Cappy Hub<\/span><\/a>/g,
+    ),
+  ).toHaveLength(1);
+  expect(html).toContain('aria-label="Switch to light theme"');
+  expect(html).toContain(">Officer</span>");
+  expect(html).toContain('aria-label="Main navigation"');
+});
+
 it("shows Calendar in the protected navigation and marks it active", () => {
   const html = renderToStaticMarkup(
     <SiteNavigation isAdmin={false} account={<span>Officer</span>} />,
@@ -18,10 +36,8 @@ it("shows Calendar in the protected navigation and marks it active", () => {
 
   expect(html).toMatch(/aria-current="page"[^>]*href="\/calendar"/);
   expect(html).toContain(">Calendar</a>");
-  expect(html).toContain(
-    'aria-label="Main navigation, current section: Calendar"',
-  );
-  expect(html).toContain("<details");
+  expect(html).toMatch(/aria-current="page"[^>]*href="\/calendar"/);
+  expect(html).not.toContain("<details");
   expect(html).toContain('aria-label="Main navigation"');
   for (const href of [
     "/",
@@ -52,15 +68,20 @@ it("shows the Admin navigation item only to application admins", () => {
   expect(officerHtml).not.toContain('href="/system-log"');
 });
 
+it.each(["lead", "officer"])("omits Admin navigation for %s", (role) => {
+  const html = renderToStaticMarkup(
+    <SiteNavigation isAdmin={false} account={<span>{role}</span>} />,
+  );
+
+  expect(html).not.toContain('href="/admin"');
+});
+
 it("marks Admin as the current section from its System Log workflow", () => {
   pathState.current = "/system-log";
   const html = renderToStaticMarkup(
     <SiteNavigation isAdmin={true} account={<span>Admin</span>} />,
   );
 
-  expect(html).toContain(
-    'aria-label="Main navigation, current section: Admin"',
-  );
   expect(html).toMatch(/aria-current="page"[^>]*href="\/admin"/);
   expect(html).not.toContain('href="/system-log"');
   pathState.current = "/calendar";
@@ -72,9 +93,6 @@ it("keeps nested records active under their primary navigation section", () => {
     <SiteNavigation isAdmin={false} account={<span>Officer</span>} />,
   );
 
-  expect(html).toContain(
-    'aria-label="Main navigation, current section: Officers"',
-  );
   expect(html).toMatch(/aria-current="page"[^>]*href="\/officers"/);
   pathState.current = "/calendar";
 });

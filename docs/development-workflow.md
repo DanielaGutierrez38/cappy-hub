@@ -40,7 +40,7 @@ npm run db:reset
 npm test
 ```
 
-`db:start` does not reset rows. `db:reset` clears the local database and replays migrations without synthetic seed data, which is required by pgTAP fixtures. For interactive app development and Playwright, use `npm run local:reset` instead; that creates the separate seeded local app state. See [Local Database Workflow](../.ai/skills/local-database-workflow/SKILL.md) for state transitions and failure diagnosis.
+`db:start` does not reset rows. `db:reset` clears the local database and replays migrations without synthetic seed data, which is required by pgTAP fixtures. For interactive app development or manual visual review, use `npm run local:reset` instead; that creates the separate seeded local app state. See [Local Development](local-development.md#visual-review-and-automated-testing) for the visual review policy and [Local Database Workflow](../.agents/skills/local-database-workflow/SKILL.md) for state transitions and failure diagnosis.
 
 If formatting needs correction, run `npm run format` and review the resulting diff.
 
@@ -50,10 +50,12 @@ Do not use production data for development or testing.
 
 The active **Protect Main** GitHub ruleset should require these exact status checks:
 
-- `Quality checks` — includes the Playwright browser smoke suite.
+- `Quality checks` — formatting, lint, type checks, database tests and migration verification, seed verification, and production build.
 - `Verify Preview login` — produced by the separate **Preview runtime smoke** workflow for same-repository PRs.
 
-When either required check fails, GitHub blocks merging until it passes. Review the failed Actions run for details; a Playwright failure may also include a `playwright-results-<run id>` artifact. The current ruleset has no required checks configured yet. In **Settings → Rules → Protect Main**, add the two contexts above to its required status checks. Keep its existing pull request, review, conversation-resolution, force-push, and deletion protections in place.
+CI runs database tests against a disposable migrations-only Supabase state, verifies the historical upgrade, then loads and validates the synthetic seed and links Auth accounts in the same running stack. The `--reuse-ci-seed` mode is restricted to CI and must not be used against a retained development database. Superseded PR CI and Preview checks are cancelled; `main` CI and production deployments are never cancelled by that policy.
+
+When either required check fails, GitHub blocks merging until it passes. Review the failed Actions run for details. The active **Protect Main** ruleset currently requires both contexts. Keep those checks and its existing pull request, review, conversation-resolution, force-push, and deletion protections in place.
 
 ## Commit and push
 

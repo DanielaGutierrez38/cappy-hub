@@ -56,9 +56,14 @@ begin
       'event', old.event_id::text,
       pg_catalog.jsonb_build_object('slot_id', old.id, 'difficulty', old.difficulty,
         'officer_id', old.officer_id, 'actor_id', actor_id,
-        'reason', case when exists(select 1 from public.event_officers
+        'reason', case
+          when not exists(select 1 from public.event_officers
             where event_id = old.event_id and officer_id = old.officer_id)
-          then 'requested' else 'signup_removed' end));
+            then 'signup_removed'
+          when not exists(select 1 from public.officers
+            where id = old.officer_id and status = 'active')
+            then 'officer_deactivated'
+          else 'requested' end));
   end if;
   if new.officer_id is not null then
     perform private.write_audit_log(
@@ -78,6 +83,27 @@ create trigger presentation_slots_audit_holder
   after update of officer_id on public.presentation_slots
   for each row when (old.officer_id is distinct from new.officer_id)
   execute function private.audit_presentation_slot_holder();
+
+-- Deactivation keeps an Officer's Event signups, so the signup foreign key
+-- does not fire. An inactive Officer cannot present or step down, so their
+-- slots on Events that have not started are reopened here.
+create function private.release_inactive_officer_presenter_slots() returns trigger
+language plpgsql security definer set search_path = '' as $$
+begin
+  update public.presentation_slots s set officer_id = null
+    from public.events e
+    where s.officer_id = new.id and e.id = s.event_id
+      and e.starts_at > pg_catalog.now();
+  return null;
+end;
+$$;
+revoke all on function private.release_inactive_officer_presenter_slots()
+  from public, anon, authenticated;
+
+create trigger officers_release_presenter_slots
+  after update of status on public.officers
+  for each row when (old.status = 'active' and new.status <> 'active')
+  execute function private.release_inactive_officer_presenter_slots();
 
 create function private.set_presenter_slots(p_event_id bigint, p_difficulties text[])
 returns void language plpgsql security definer set search_path = '' as $$
@@ -151,8 +177,12 @@ begin
       where event_id = p_event_id and officer_id = p_officer_id) then
     raise exception 'Officer already has a presenter slot for this event'; end if;
   -- Presenting counts as attending: reuse the audited signup path, which also
-  -- rejects inactive Officers.
+  -- rejects inactive Officers. At capacity that path only joins the waitlist,
+  -- and a waitlisted Officer cannot present; raising undoes the waitlist entry.
   perform private.change_event_signup(p_event_id, p_officer_id, false);
+  if not exists(select 1 from public.event_officers
+      where event_id = p_event_id and officer_id = p_officer_id) then
+    raise exception 'Event is full, so this officer cannot take a presenter slot'; end if;
   update public.presentation_slots set officer_id = p_officer_id where id = slot.id;
 end;
 $$;

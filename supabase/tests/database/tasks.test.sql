@@ -20,6 +20,15 @@ insert into officer_branches(officer_id,branch_id)
 select set_config('test.denver_today',
   (pg_catalog.statement_timestamp() at time zone 'America/Denver')::date::text,true);
 
+select ok(to_regclass('public.task_assignments') is null,
+ 'Task assignment reads and writes have no legacy projection table');
+select ok(to_regprocedure('private.sync_legacy_task_assignment(bigint)') is null
+  and to_regprocedure('private.sync_legacy_task_assignment_write()') is null
+  and not exists(select 1 from pg_catalog.pg_trigger
+    where tgrelid='public.task_officer_assignments'::regclass and not tgisinternal
+      and tgname='task_assignments_sync_officer_assignments'),
+ 'legacy projection synchronization objects are absent');
+
 insert into tasks
   (id,title,description,task_type,branch_id,due_date,points,approval_required,created_by,removed_at,removed_by)
 values
@@ -38,25 +47,21 @@ values
  (-9716,-973,-972,now()-interval '2 days'),
  (-9716,-974,-972,null);
 -- Seed representative historical approval and award rows as existing data.
-insert into task_assignments(task_id,officer_id,assigned_by,assigned_at,completed_at,approved_at,approved_by)
+insert into task_officer_assignments(task_id,officer_id,assigned_by,assigned_at,completed_at,approved_at,approved_by)
 values(-9718,-973,-972,now()-interval '5 days',now()-interval '4 days',now()-interval '3 days',-972);
 insert into point_transactions(officer_id,task_id,points,reason,award_type,created_by)
 values(-973,-9718,2.5,'Historical Task award','task','00000000-0000-4000-8000-000000000972');
 
-select ok(not has_function_privilege('anon','public.complete_task(bigint)','EXECUTE')
-  and not has_function_privilege('authenticated','public.complete_task(bigint)','EXECUTE')
-  and not has_function_privilege('anon','public.approve_task(bigint)','EXECUTE')
-  and not has_function_privilege('authenticated','public.approve_task(bigint)','EXECUTE')
-  and not has_function_privilege('anon','private.complete_task(bigint)','EXECUTE')
-  and not has_function_privilege('authenticated','private.complete_task(bigint)','EXECUTE')
-  and not has_function_privilege('anon','private.approve_task(bigint)','EXECUTE')
-  and not has_function_privilege('authenticated','private.approve_task(bigint)','EXECUTE')
-  and not has_function_privilege('anon','private.award_task(bigint)','EXECUTE')
-  and not has_function_privilege('authenticated','private.award_task(bigint)','EXECUTE')
-  and has_function_privilege('postgres','private.complete_task(bigint)','EXECUTE')
-  and has_function_privilege('postgres','private.approve_task(bigint)','EXECUTE')
-  and has_function_privilege('postgres','private.award_task(bigint)','EXECUTE'),
-  'legacy Task completion, approval, and award helpers are unavailable to clients but remain defined for trusted calls');
+select ok(to_regprocedure('public.assign_task(bigint,bigint)') is null
+  and to_regprocedure('private.assign_task(bigint,bigint)') is null
+  and to_regprocedure('public.complete_task(bigint)') is null
+  and to_regprocedure('private.complete_task(bigint)') is null
+  and to_regprocedure('public.approve_task(bigint)') is null
+  and to_regprocedure('private.approve_task(bigint)') is null
+  and to_regprocedure('private.award_task(bigint)') is null
+  and to_regprocedure('public.save_event(text,text,bigint,text,timestamptz,timestamptz,bigint[],bigint)') is null
+  and to_regprocedure('private.save_event(text,text,bigint,text,timestamptz,timestamptz,bigint[],bigint)') is null,
+  'retired Task and Event compatibility RPCs and unused helpers are removed');
 
 select ok(not has_function_privilege('anon','private.process_due_tasks()','EXECUTE')
   and not has_function_privilege('authenticated','private.process_due_tasks()','EXECUTE')
@@ -89,10 +94,6 @@ select is((select count(*) from task_officer_assignments where task_id=-9710),1:
  'self-assignment creates only the current Officer row');
 select is((select completed_at from task_officer_assignments where task_id=-9710 and officer_id=-973),null::timestamptz,
  'new self-assignment starts Not completed');
-select is((select count(*) from task_assignments where task_id=-9710),1::bigint,
- 'legacy singleton projection remains available for the old application');
-select throws_ok($$select assign_task(-9710,-972)$$,
- 'P0001','Cannot assign another officer','ordinary Officer cannot use legacy RPC to assign a peer');
 select throws_ok($$select bulk_assign_task_officers(-9710,array[-974]::bigint[])$$,
  'P0001','Task outside branch scope','ordinary Officer cannot bulk-assign');
 select throws_ok($$select set_task_assignment_completion(-9710,-973,true)$$,
@@ -132,7 +133,7 @@ select is((select completed_at from task_officer_assignments where task_id=-9711
 select throws_ok($$select remove_task_assignment(-9711,-973)$$,
  'P0001','Completed or awarded Task assignments cannot be removed','completed assignment cannot be removed');
 select throws_ok($$select remove_task(-9711)$$,
- 'P0001','Completed or awarded Tasks cannot be removed','completed standalone Task cannot be removed');
+ 'P0001','Completed or awarded Tasks cannot be archived','completed standalone Task cannot be archived');
 select lives_ok($$select set_task_assignment_completion(-9711,-973,false)$$,
  'manager can correct an unawarded completion to Not completed');
 select lives_ok($$select set_task_assignment_completion(-9711,-973,true)$$,
@@ -222,33 +223,23 @@ select is((select removed_by from tasks where id=-9713),-972::bigint,
 select lives_ok($$select remove_task(-9717)$$,
  'unassigned standalone Task is logically removable');
 reset role;
-select is((select count(*) from audit_logs where entity_type='task' and entity_id='-9713' and action='task.removed'),1::bigint,
- 'standalone removal is audited once');
+select is((select count(*) from audit_logs where entity_type='task' and entity_id='-9713' and action='task.archived'),1::bigint,
+ 'standalone archive is audited once');
 
--- The compatibility assignment RPC remains available, but its obsolete
--- completion and approval mutations are retired for every authenticated user.
+-- Current bulk assignment uses the canonical relation without a projection.
 select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000000972',true);
 set local role authenticated;
-select lives_ok($$select assign_task(-9715,-973)$$,'legacy assignment RPC remains callable');
+select lives_ok($$select bulk_assign_task_officers(-9715,array[-973]::bigint[])$$,
+ 'manager assigns the approval-required Task through the supported bulk RPC');
 reset role;
 select is((select count(*) from task_officer_assignments where task_id=-9715 and officer_id=-973),1::bigint,
- 'legacy assignment writes synchronize into the canonical relation');
+ 'supported bulk assignment writes to the canonical relation');
 select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000000973',true);
 set local role authenticated;
-select throws_ok($$select complete_task(-9715)$$,'42501',null,
- 'assigned Officer cannot invoke the retired legacy completion RPC');
-select throws_ok($$select private.complete_task(-9715)$$,'42501',null,
- 'assigned Officer cannot invoke the retired private completion helper');
 select is((select completed_at from task_officer_assignments where task_id=-9715 and officer_id=-973),null::timestamptz,
- 'denied legacy completion leaves the canonical assignment Not completed');
+ 'assignment remains Not completed before manager completion');
 select is((select count(*) from point_transactions where task_id=-9715 and award_type='task'),0::bigint,
- 'denied legacy completion produces no Task point award');
-select throws_ok($$select approve_task(-9715)$$,'42501',null,
- 'authenticated manager cannot invoke the retired legacy approval RPC');
-select throws_ok($$select private.approve_task(-9715)$$,'42501',null,
- 'authenticated manager cannot invoke the retired private approval helper');
-select throws_ok($$select private.award_task(-9715)$$,'42501',null,
- 'authenticated user cannot invoke the retired private award helper');
+ 'unfinished Task has no Task point award');
 reset role;
 select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000000973',true);
 set local role authenticated;

@@ -248,12 +248,27 @@ select lives_ok($$select save_officer('Slots Officer A',
   'slots-officer-a@example.org')$$,'admin can deactivate a presenter');
 select is((select count(*) from presentation_slots where officer_id=-1404),0::bigint,
   'deactivation reopens every upcoming slot the Officer held');
+select ok(exists(select 1 from event_officers where event_id=-1401 and officer_id=-1404),
+  'deactivation keeps the Event signup');
 reset role;
 select ok(exists(select 1 from audit_logs where action='presentation.unassigned'
   and entity_id='-1401' and details->>'officer_id'='-1404'
-  and details->>'reason'='signup_removed'
+  and details->>'reason'='officer_deactivated'
   and actor_id='00000000-0000-4000-8000-000000001401'),
   'a slot reopened by deactivation is audited with the admin as actor');
+
+-- A full Event cannot take a presenter who is not already signed up.
+update events set max_volunteers=(select count(*) from event_officers where event_id=-1401)
+  where id=-1401;
+set local role authenticated;
+select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000001402',true);
+select throws_ok($$select change_presenter_slot(-1401,'medium',-1402)$$,
+  'P0001','Event is full, so this officer cannot take a presenter slot',
+  'a full Event rejects a presenter who would only be waitlisted');
+select is((select count(*) from event_waitlist where event_id=-1401 and officer_id=-1402),
+  0::bigint,'a rejected presenter claim leaves no waitlist entry');
+reset role;
+update events set max_volunteers=null where id=-1401;
 
 -- Integrity holds below the RPC layer.
 select throws_ok($$insert into presentation_slots(event_id,difficulty) values(-1401,'easy')$$,

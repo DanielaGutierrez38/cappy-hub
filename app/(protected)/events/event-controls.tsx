@@ -19,14 +19,18 @@ import {
   selfSignup,
   cancelEvent,
   restoreEvent,
+  restoreEventArchive,
   removeEvent,
+  leaveEventWaitlist,
 } from "./actions";
 export function SelfSignupForm({
   eventId,
   eventName,
+  full = false,
 }: {
   eventId: number;
   eventName: string;
+  full?: boolean;
 }) {
   const [state, action, pending] = useActionState(selfSignup, {
     ...initialFormActionState,
@@ -36,10 +40,16 @@ export function SelfSignupForm({
       <input type="hidden" name="event_id" value={eventId} />
       <button
         disabled={pending}
-        aria-label={`Sign up for ${eventName}`}
+        aria-label={`${full ? "Join the waitlist for" : "Sign up for"} ${eventName}`}
         className="whitespace-nowrap px-3 py-1.5"
       >
-        {pending ? "Signing up…" : "Sign up"}
+        {pending
+          ? full
+            ? "Joining waitlist…"
+            : "Signing up…"
+          : full
+            ? "Join waitlist"
+            : "Sign up"}
       </button>
       <ActionFeedback state={state} />
     </form>
@@ -50,11 +60,13 @@ export function SignupForm({
   officers,
   remove = false,
   officerId,
+  full = false,
 }: {
   eventId: number;
   officers?: Pick<Tables<"officers">, "id" | "name">[];
   remove?: boolean;
   officerId?: number;
+  full?: boolean;
 }) {
   const [state, action, pending] = useActionState(changeSignup, {
     ...initialFormActionState,
@@ -95,10 +107,29 @@ export function SignupForm({
         {pending
           ? remove
             ? "Removing…"
-            : "Adding…"
+            : full
+              ? "Joining waitlist…"
+              : "Adding…"
           : remove
             ? "Remove signup"
-            : "Add officer"}
+            : full
+              ? "Join waitlist"
+              : "Add officer"}
+      </button>
+    </form>
+  );
+}
+
+export function LeaveWaitlistForm({ eventId }: { eventId: number }) {
+  const [state, action, pending] = useActionState(leaveEventWaitlist, {
+    ...initialFormActionState,
+  });
+  return (
+    <form action={action}>
+      <input type="hidden" name="event_id" value={eventId} />
+      <ActionFeedback state={state} />
+      <button disabled={pending} className="button-secondary">
+        {pending ? "Leaving waitlist…" : "Leave waitlist"}
       </button>
     </form>
   );
@@ -130,7 +161,7 @@ export function BulkAddOfficersForm({
       >
         <legend>{past ? "Select attendees" : "Select officers to add"}</legend>
         {officers.length ? (
-          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+          <div className="event-bulk-officer-list mt-2 grid grid-cols-2 gap-2">
             {officers.map((officer) => (
               <label key={officer.id} className="flex items-center gap-2">
                 <input
@@ -222,7 +253,22 @@ export function CancelForm({
   );
 }
 
-export function RestoreEventForm({ eventId }: { eventId: number }) {
+export function RestoreArchivedEventForm({ eventId }: { eventId: number }) {
+  const [state, action, pending] = useActionState(restoreEventArchive, {
+    ...initialFormActionState,
+  });
+  return (
+    <form action={action}>
+      <input type="hidden" name="event_id" value={eventId} />
+      <ActionFeedback state={state} />
+      <button disabled={pending} className="button-secondary">
+        {pending ? "Restoring…" : "Restore Event"}
+      </button>
+    </form>
+  );
+}
+
+export function RestoreCancelledEventForm({ eventId }: { eventId: number }) {
   const [state, action, pending] = useActionState(restoreEvent, {
     ...initialFormActionState,
   });
@@ -231,7 +277,7 @@ export function RestoreEventForm({ eventId }: { eventId: number }) {
       <input type="hidden" name="event_id" value={eventId} />
       <ActionFeedback state={state} />
       <button disabled={pending} className="button-secondary">
-        {pending ? "Restoring…" : "Restore event"}
+        {pending ? "Restoring…" : "Restore cancellation"}
       </button>
     </form>
   );
@@ -261,14 +307,14 @@ export function RemoveEventForm({
       )}
       <ActionFeedback state={state} />
       <ConfirmationDialog
-        title="Remove Event?"
+        title="Archive Event?"
         description={
           series
-            ? "This removes the Event in the selected scope according to current series rules. Existing protected history remains governed by the current workflow rules."
-            : "This removes the Event from active use. Existing protected history remains governed by the current workflow rules."
+            ? "This archives the Event in the selected scope. Existing workflow history is preserved."
+            : "This archives the Event from routine browsing. Its signups, Points, and history are preserved."
         }
-        triggerLabel={pending ? "Removing…" : "Remove event"}
-        confirmLabel="Remove Event"
+        triggerLabel={pending ? "Archiving…" : "Archive Event"}
+        confirmLabel="Archive Event"
         destructive
         pending={pending}
         triggerClassName="button-secondary"

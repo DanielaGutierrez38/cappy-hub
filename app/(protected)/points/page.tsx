@@ -90,27 +90,27 @@ export default async function PointsPage({
   const [
     historyCount,
     visibleHistoryCount,
-    totals,
     officers,
+    activeOfficers,
     events,
     recentEvents,
     configuration,
   ] = await Promise.all([
     buildPointHistoryQuery(true, true),
     buildPointHistoryQuery(false, true),
+    supabase.from("officers").select("id,name,status").order("name"),
     supabase
-      .from("officer_point_totals")
-      .select("*")
-      .order("total_points", { ascending: false })
-      .order("name", { ascending: true }),
-    supabase.from("officers").select("id,name").order("name"),
+      .from("officers")
+      .select("id,name")
+      .eq("status", "active")
+      .order("name"),
     supabase
       .from("events")
       .select("id,name,event_date")
       .order("event_date", { ascending: false }),
     supabase
       .from("events")
-      .select("id,name")
+      .select("id,name,event_date")
       .is("deleted_at", null)
       .order("event_date", { ascending: false })
       .limit(5),
@@ -123,13 +123,24 @@ export default async function PointsPage({
   if (
     historyCount.error ||
     visibleHistoryCount.error ||
-    totals.error ||
     officers.error ||
+    activeOfficers.error ||
     events.error ||
     recentEvents.error ||
     configuration.error
   )
     throw new Error("Failed to load points");
+
+  const totals = await supabase
+    .from("officer_point_totals")
+    .select("*")
+    .in(
+      "id",
+      activeOfficers.data.map((officer) => officer.id),
+    )
+    .order("total_points", { ascending: false })
+    .order("name", { ascending: true });
+  if (totals.error) throw new Error("Failed to load officer point totals");
 
   const totalPages = Math.max(
     1,
@@ -158,61 +169,80 @@ export default async function PointsPage({
           ? "No removed point transactions."
           : "No point transactions yet.";
 
+  const officerTotals = (
+    <section className="min-w-0">
+      <SectionHeading title="Officer totals" />
+      <div
+        className="officer-totals-scroll"
+        role="region"
+        aria-label="Officer totals. Scroll within this table to view all officers."
+        tabIndex={0}
+      >
+        <table className="min-w-0">
+          <thead>
+            <tr>
+              <th scope="col">Rank</th>
+              <th scope="col">Officer</th>
+              <th scope="col" className="text-right">
+                Total points
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {totals.data.map((officer, index) => (
+              <tr key={officer.id}>
+                <td className="w-20 tabular-nums text-muted">{index + 1}</td>
+                <td>
+                  <Link href={`/officers/${officer.id}`}>{officer.name}</Link>
+                </td>
+                <td className="text-right">
+                  <PointValue value={officer.total_points ?? 0} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+
   return (
     <div data-page-width="wide" className="space-y-6">
       <PageHeader
         title="Points"
         description="Finished events receive participation awards automatically from the scheduled database processor."
-      />
-      <section className="space-y-2">
-        <SectionHeading title="Point configuration" />
-        <p>
-          Current participation rate:{" "}
-          {configuration.data.participation_points_per_hour} points/hour
-        </p>
-        {admin && (
-          <RateForm rate={configuration.data.participation_points_per_hour} />
-        )}
-      </section>
-      <section>
-        <SectionHeading title="Officer totals" />
-        <TableFrame compact>
-          <table>
-            <thead>
-              <tr>
-                <th scope="col">Rank</th>
-                <th scope="col">Officer</th>
-                <th scope="col" className="text-right">
-                  Total points
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {totals.data.map((officer, index) => (
-                <tr key={officer.id}>
-                  <td className="w-20 tabular-nums text-muted">{index + 1}</td>
-                  <td>
-                    <Link href={`/officers/${officer.id}`}>{officer.name}</Link>
-                  </td>
-                  <td className="text-right">
-                    <PointValue value={officer.total_points ?? 0} />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </TableFrame>
-      </section>
-      {admin && (
-        <section>
-          <SectionHeading title="Add manual transaction or correction" />
-          <div className="rounded-lg border border-border bg-surface/40 p-4 sm:p-5">
+        action={
+          admin ? (
             <TransactionForm
-              officers={officers.data}
+              officers={activeOfficers.data}
               events={recentEvents.data}
             />
+          ) : (
+            <p className="text-sm text-secondary">
+              Participation rate:{" "}
+              {configuration.data.participation_points_per_hour} points/hour
+            </p>
+          )
+        }
+      />
+      {admin ? (
+        <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(17rem,0.38fr)_minmax(0,0.62fr)]">
+          {officerTotals}
+          <div className="min-w-0 space-y-6">
+            <section className="space-y-2">
+              <SectionHeading title="Point configuration" />
+              <p>
+                Current participation rate:{" "}
+                {configuration.data.participation_points_per_hour} points/hour
+              </p>
+              <RateForm
+                rate={configuration.data.participation_points_per_hour}
+              />
+            </section>
           </div>
-        </section>
+        </div>
+      ) : (
+        <div className="mx-auto w-full max-w-4xl">{officerTotals}</div>
       )}
       <section className="space-y-4">
         <SectionHeading
@@ -230,11 +260,14 @@ export default async function PointsPage({
           awardType={awardType}
           officerId={officerId}
           eventId={eventId}
+          dateRangeIsReversed={dateRangeIsReversed}
         />
         {dateRangeIsReversed && (
-          <p role="status">Choose a From date on or before the To date.</p>
+          <p id="point-history-date-error" role="alert">
+            Choose a From date on or before the To date.
+          </p>
         )}
-        <TableFrame compact>
+        <TableFrame compact label="Point history">
           <HistoryTable
             returnTo={listPageUrl("/points", currentFilterSearch, page)}
             transactions={transactions.data}

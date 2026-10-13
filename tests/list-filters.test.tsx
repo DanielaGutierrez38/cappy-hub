@@ -53,6 +53,7 @@ let queries: Query[];
 let visibleCount: number;
 let filteredCount: number;
 let admin: boolean;
+let failingTables: Set<string>;
 const actor = {
   id: 1,
   authUserId: "00000000-0000-0000-0000-000000000001",
@@ -66,11 +67,13 @@ beforeEach(() => {
   visibleCount = 4;
   filteredCount = 0;
   admin = true;
+  failingTables = new Set();
   vi.mocked(getAuthorizationContext).mockImplementation(
     async () =>
       ({ ...actor, applicationRole: admin ? "admin" : "officer" }) as never,
   );
   vi.mocked(createClient).mockResolvedValue({
+    rpc: async () => ({ data: [], error: null }),
     from: (table: string) => {
       const record: Query = { table, calls: [] };
       queries.push(record);
@@ -132,7 +135,7 @@ beforeEach(() => {
                   ...(row as Record<string, unknown>),
                 }))
               : data,
-          error: null,
+          error: failingTables.has(table) ? { message: "Query failed" } : null,
           count: head
             ? isBaseline || pointsBaseline || tasksBaseline
               ? visibleCount
@@ -170,6 +173,20 @@ it("filters officer identity and memberships on the server without narrowing dis
   has(query, "eq", "position_id", 2);
   has(query, "eq", "filter_branch.branch_id", 3);
   expect(html).toContain("No officers match these filters.");
+});
+
+it("defaults the Officers directory to active and supports an explicit all view", async () => {
+  await render(OfficersPage);
+  has(forTable("officers")[0], "eq", "status", "active");
+
+  queries = [];
+  const html = await render(OfficersPage, { status: "all" });
+  expect(
+    forTable("officers")[0].calls.some(
+      ([method, column]) => method === "eq" && column === "status",
+    ),
+  ).toBe(false);
+  expect(html).toContain('<option value="all" selected="">All</option>');
 });
 
 it.each(["upcoming", "happening", "past", "cancelled"])(
@@ -252,6 +269,115 @@ it("combines search, type, and Branch filters with current temporal sections", a
   expect(html).toContain("Upcoming events");
 });
 
+it("keeps empty Events and Task assignment groups labeled in a compact line", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-10-05T06:00:00.000Z"));
+  try {
+    rows.events = [
+      {
+        id: 7,
+        name: "Upcoming workshop",
+        event_date: "2099-10-08",
+        status: "scheduled",
+        deleted_at: null,
+        participation_points_per_hour_at_end: null,
+        event_types: { name: "Workshop" },
+        event_branches: [],
+        event_officers: [],
+        starts_at: "2099-10-08T23:00:00Z",
+        ends_at: "2099-10-09T01:00:00Z",
+      },
+    ];
+    const eventsHtml = await render(EventsPage);
+    expect(eventsHtml).toContain('aria-label="Upcoming Events — Your events"');
+    expect(eventsHtml).toContain("Your events:");
+    expect(eventsHtml).toContain("No events in this group.");
+    expect(
+      eventsHtml
+        .split('aria-label="Upcoming Events — Your events"')[1]
+        .split("</section>")[0],
+    ).not.toContain("<h3");
+    expect(eventsHtml).toContain("Other events");
+    expect(eventsHtml).toContain("Upcoming workshop");
+
+    queries = [];
+    rows.tasks = [
+      {
+        id: 8,
+        title: "Upcoming task",
+        description: "Assigned to another Officer",
+        task_type: "one_time",
+        branch_id: 2,
+        due_date: "2099-10-08",
+        points: 3,
+        branches: { name: "intro" },
+        task_officer_assignments: [{ officer_id: 2, completed_at: null }],
+      },
+    ];
+    const tasksHtml = await render(TasksPage);
+    expect(tasksHtml).toContain('aria-label="Upcoming tasks: Your tasks"');
+    expect(tasksHtml).toContain("Your tasks:");
+    expect(tasksHtml).toContain("No tasks in this group.");
+    expect(
+      tasksHtml
+        .split('aria-label="Upcoming tasks: Your tasks"')[1]
+        .split("</section>")[0],
+    ).not.toContain("<h3");
+    expect(tasksHtml).toContain("Other tasks");
+    expect(tasksHtml).toContain("Upcoming task");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("gives each grouped Event table a distinct accessible name", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-10-05T06:00:00.000Z"));
+  try {
+    rows.events = [
+      {
+        id: 11,
+        name: "This week event",
+        event_date: "2026-10-08",
+        status: "scheduled",
+        deleted_at: null,
+        participation_points_per_hour_at_end: null,
+        event_types: { name: "Workshop" },
+        event_branches: [],
+        event_officers: [{ officer_id: 1 }],
+        starts_at: "2026-10-08T23:00:00Z",
+        ends_at: "2026-10-09T01:00:00Z",
+      },
+      {
+        id: 12,
+        name: "Upcoming event",
+        event_date: "2026-10-12",
+        status: "scheduled",
+        deleted_at: null,
+        participation_points_per_hour_at_end: null,
+        event_types: { name: "Workshop" },
+        event_branches: [],
+        event_officers: [],
+        starts_at: "2026-10-12T23:00:00Z",
+        ends_at: "2026-10-13T01:00:00Z",
+      },
+    ];
+
+    const html = await render(EventsPage);
+    expect(html).toContain(
+      'role="region" aria-label="Events table: Events this week — Your events" tabindex="0"',
+    );
+    expect(html).toContain(
+      'role="region" aria-label="Events table: Upcoming Events — Other events" tabindex="0"',
+    );
+    expect(
+      html.match(/role="region" aria-label="[^"]+" tabindex="0"/g),
+    ).toHaveLength(2);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it("preserves an explicit Past filter in Event return context", async () => {
   rows.events = [
     {
@@ -276,7 +402,8 @@ it("preserves an explicit Past filter in Event return context", async () => {
   expect(html).not.toContain("Upcoming events");
 });
 
-it("does not offer Removed Event browsing and keeps forged removed URLs active-only", async () => {
+it("does not offer Archived Event browsing and keeps forged archive URLs active-only", async () => {
+  admin = false;
   rows.events = [
     {
       id: 7,
@@ -293,15 +420,33 @@ it("does not offer Removed Event browsing and keeps forged removed URLs active-o
     },
   ];
   const html = await render(EventsPage, {
-    status: "removed",
-    removed: "1",
+    status: "archived",
     branch: "2",
   });
   has(forTable("events")[0], "is", "deleted_at", null);
-  expect(html).not.toContain('value="removed"');
+  expect(html).not.toContain('value="archived"');
+  expect(html).toContain('value="upcoming"');
+  expect(html).toContain('value="happening"');
+  expect(html).toContain('value="past"');
+  expect(html).toContain('value="cancelled"');
   expect(html).toContain("This week&#x27;s events");
   expect(html).toContain("Upcoming events");
   expect(html).toContain("returnTo=%2Fevents%3Fbranch%3D2");
+});
+
+it("offers authorized managers Archived Event and Task views", async () => {
+  const eventHtml = await render(EventsPage, { status: "archived" });
+  const eventQuery = forTable("events")[0];
+  has(eventQuery, "not", "deleted_at", "is", null);
+  expect(eventHtml).toContain('value="archived"');
+
+  queries = [];
+  const taskHtml = await render(TasksPage, { view: "archived" });
+  const taskQuery = forTable("tasks").find(({ calls }) =>
+    calls.some(([method]) => method === "order"),
+  )!;
+  has(taskQuery, "not", "removed_at", "is", null);
+  expect(taskHtml).toContain('value="archived"');
 });
 
 it.each(["open", "in_progress", "complete"])(
@@ -461,8 +606,22 @@ it("groups current Tasks by Denver week before splitting multi-Officer assignmen
     expect(query.calls[0][1]).toContain("task_officer_assignments(");
     expect(html).toContain("This week&#x27;s tasks");
     expect(html).toContain("Upcoming tasks");
-    expect(html).toContain('aria-label="Your tasks"');
-    expect(html).toContain('aria-label="Other tasks"');
+    expect(html).toContain('aria-label="This week&#x27;s tasks: Your tasks"');
+    expect(html).toContain('aria-label="This week&#x27;s tasks: Other tasks"');
+    expect(html).toContain('aria-label="Upcoming tasks: Your tasks"');
+    expect(html).toContain('aria-label="Upcoming tasks: Other tasks"');
+    expect(html).toContain(
+      'role="region" aria-label="Tasks table: This week&#x27;s tasks: Your tasks" tabindex="0"',
+    );
+    expect(html).toContain(
+      'role="region" aria-label="Tasks table: This week&#x27;s tasks: Other tasks" tabindex="0"',
+    );
+    expect(html).toContain(
+      'role="region" aria-label="Tasks table: Upcoming tasks: Other tasks" tabindex="0"',
+    );
+    expect(
+      html.match(/role="region" aria-label="[^"]+" tabindex="0"/g),
+    ).toHaveLength(3);
     expect(html.indexOf("Today&#x27;s work")).toBeLessThan(
       html.indexOf("Sunday deadline"),
     );
@@ -650,7 +809,7 @@ it("forces active Points for non-admins with forged removed/all status", async (
   expect(html).not.toContain('name="status"');
 });
 
-it("filters System Log actor, action, entity and inclusive Denver calendar dates", async () => {
+it("filters System Log actor, activity, entity and inclusive Denver calendar dates", async () => {
   const html = await render(SystemLogPage, {
     q: "task",
     actor: "system",
@@ -661,11 +820,25 @@ it("filters System Log actor, action, entity and inclusive Denver calendar dates
   });
   const query = forTable("audit_logs")[0];
   has(query, "is", "actor_id", null);
-  has(query, "filter", "action", "imatch", "update");
+  const activityFilter = query.calls
+    .filter(([method]) => method === "or")
+    .map(([, filter]) => filter)
+    .find((filter) => String(filter).includes("action.in."));
+  expect(activityFilter).toContain('action.imatch."update"');
   has(query, "eq", "entity_type", "task");
   has(query, "gte", "created_at", "2026-03-08T07:00:00.000Z");
   has(query, "lt", "created_at", "2026-03-09T06:00:00.000Z");
   expect(html).toContain("No System Log entries match these filters.");
+  expect(html).toContain("Activity");
+  expect(html).toContain('placeholder="e.g. signed up or cancelled event"');
+});
+
+it("matches readable System Log activity wording to audit action codes", async () => {
+  await render(SystemLogPage, { action: "cancelled event" });
+  const query = forTable("audit_logs")[0];
+  const activityFilter = query.calls.find(([method]) => method === "or")?.[1];
+  expect(activityFilter).toContain("event.cancelled");
+  expect(activityFilter).toContain('action.imatch."cancelled event"');
 });
 
 it("rejects System Log before querying for non-admins", async () => {
@@ -758,7 +931,7 @@ it("keeps officer identity, status and contact information in a semantic table",
   expect(html).toContain("Technical Officer");
   expect(html).toContain("Intro");
   expect(html).toContain("Active");
-  expect(html).toContain("Contact details");
+  expect(html).not.toContain("Contact details");
   expect(html).toContain('href="mailto:emi@miners.utep.edu"');
   expect(html).toContain('href="mailto:emi@example.test"');
 });
@@ -783,8 +956,8 @@ it("shows Task-specific details and self-assignment only in Other tasks", async 
   for (const heading of ["Due", "Type", "Branch", "Officers", "Status"])
     expect(html).toContain(`>${heading}</th>`);
   expect(html).toContain(">Action</th>");
-  expect(html).toContain("Due: Oct 8, 2099");
-  expect(html).toContain("Officers: 0 officers");
+  expect(html).not.toContain("Due: Oct 8, 2099");
+  expect(html).not.toContain("Officers: 0 officers");
   expect(html).toContain(">Open</span>");
   expect(html).toContain(">Intro</span>");
   expect(html).not.toContain(">Points</th>");
@@ -798,8 +971,8 @@ it("shows Task-specific details and self-assignment only in Other tasks", async 
   expect(html).toContain("Oct 8, 2099");
   expect(html).not.toContain("2099-10-08");
   expect(html).not.toContain("Select officer");
-  expect(html).toContain('aria-label="Your tasks"');
-  expect(html).toContain('aria-label="Other tasks"');
+  expect(html).toContain('aria-label="Upcoming tasks: Your tasks"');
+  expect(html).toContain('aria-label="Upcoming tasks: Other tasks"');
 });
 
 it("preserves the full System Log row and provides a keyboard-scroll region", async () => {
@@ -811,7 +984,18 @@ it("preserves the full System Log row and provides a keyboard-scroll region", as
       action: "event.updated",
       entity_type: "event",
       entity_id: 8,
-      details: { name: "Synthetic workshop room" },
+      details: {
+        before: {
+          name: "Synthetic workshop room",
+          location: "Old room",
+          description: "A long audit value that stays available in full.",
+        },
+        after: {
+          name: "Synthetic workshop room 2",
+          location: "New room",
+          description: "A long audit value that stays available in full.",
+        },
+      },
       created_at: "2026-10-03T12:00:00.000Z",
     },
   ];
@@ -823,8 +1007,17 @@ it("preserves the full System Log row and provides a keyboard-scroll region", as
   for (const heading of ["Time", "Actor", "Activity", "Record", "Details"])
     expect(html).toContain(`<th scope="col">${heading}</th>`);
   expect(html).toContain("System");
-  expect(html).toContain("Synthetic workshop room");
-  expect(html).toContain("Technical details");
+  expect(html).toContain("Synthetic workshop room 2");
+  expect(html).toContain("2 changes");
+  expect(html).toContain("Old room");
+  expect(html).toContain("New room");
+  expect(html).toContain("A long audit value that stays available in full.");
+  expect(html).toMatch(
+    /<summary class="min-h-10 cursor-pointer">2 changes<\/summary>/,
+  );
+  expect(html).toContain(
+    '<summary class="min-h-10 cursor-pointer">Technical details</summary>',
+  );
   expect(html).toContain('type="date"');
 });
 
@@ -876,6 +1069,46 @@ it("filters a specific System Log actor without losing other URL filters", async
   expect(html).toContain("entity=officer");
   expect(html).toContain("q=change");
   expect(html).toContain("page=3");
+});
+
+it("preserves a selected Officer actor filter when Officer names are unavailable", async () => {
+  filteredCount = 125;
+  rows.audit_logs = [
+    {
+      id: 23,
+      actor_id: null,
+      actor_officer_id: actor.id,
+      action: "officer.updated",
+      entity_type: "officer",
+      entity_id: actor.id,
+      details: { name: "Alex" },
+      created_at: "2026-10-03T12:00:00.000Z",
+    },
+  ];
+  failingTables.add("officers");
+
+  const html = await render(SystemLogPage, {
+    actor: String(actor.id),
+    q: "updated",
+    page: "2",
+  });
+  const actorFilter = html
+    .split('<select name="actor"')[1]
+    .split("</select>")[0];
+
+  expect(actorFilter).toContain(
+    '<option value="' +
+      actor.id +
+      '" selected="">Officer #' +
+      actor.id +
+      " (name unavailable)</option>",
+  );
+  expect(html).toContain("Officer names are unavailable");
+  expect(html).toContain("officer.updated");
+  expect(html).toContain("q=updated");
+  expect(html).toContain("actor=1");
+  expect(html).toContain("q=updated&amp;actor=1&amp;page=3");
+  has(forTable("audit_logs")[0], "eq", "actor_officer_id", actor.id);
 });
 
 it.each([

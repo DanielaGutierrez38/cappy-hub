@@ -51,6 +51,7 @@ select ok(not has_function_privilege('authenticated','private.process_finished_e
   and not has_function_privilege('authenticated','private.process_due_tasks()','EXECUTE')
   and has_function_privilege('authenticated','public.claim_current_officer_identity()','EXECUTE')
   and has_function_privilege('authenticated','public.save_event_with_links(text,text,bigint,text,date,timestamptz,timestamptz,bigint[],bigint,text,text)','EXECUTE')
+  and has_function_privilege('authenticated','public.save_event_with_signup_sheet(text,text,bigint,text,date,timestamptz,timestamptz,bigint[],text,bigint,text,text)','EXECUTE')
   and has_function_privilege('authenticated','public.create_event_location(text)','EXECUTE')
   and has_function_privilege('authenticated','public.rename_event_location(bigint,text)','EXECUTE')
   and has_function_privilege('authenticated','public.delete_event_location(bigint)','EXECUTE')
@@ -67,12 +68,20 @@ select ok(has_function_privilege('authenticated','public.self_assign_task(bigint
   and not has_any_column_privilege('authenticated','public.task_officer_assignments','UPDATE')
   and not has_table_privilege('authenticated','public.task_officer_assignments','DELETE'),
   'new Task read access and trusted mutation RPCs are granted without raw writes');
-select ok(not has_function_privilege('authenticated','public.complete_task(bigint)','EXECUTE')
-  and not has_function_privilege('authenticated','public.approve_task(bigint)','EXECUTE')
-  and not has_function_privilege('authenticated','private.complete_task(bigint)','EXECUTE')
-  and not has_function_privilege('authenticated','private.approve_task(bigint)','EXECUTE')
-  and not has_function_privilege('authenticated','private.award_task(bigint)','EXECUTE'),
-  'legacy Task completion, approval, and award helpers are not executable by authenticated clients');
+select ok(to_regprocedure('public.assign_task(bigint,bigint)') is null
+  and to_regprocedure('public.save_event(text,text,bigint,text,timestamptz,timestamptz,bigint[],bigint)') is null
+  and to_regprocedure('public.complete_task(bigint)') is null
+  and to_regprocedure('public.approve_task(bigint)') is null
+  and to_regprocedure('private.assign_task(bigint,bigint)') is null
+  and to_regprocedure('private.save_event(text,text,bigint,text,timestamptz,timestamptz,bigint[],bigint)') is null
+  and to_regprocedure('private.complete_task(bigint)') is null
+  and to_regprocedure('private.approve_task(bigint)') is null
+  and to_regprocedure('private.award_task(bigint)') is null,
+  'retired compatibility RPCs and unused private helpers are absent');
+select ok(to_regprocedure('public.delete_warning(bigint)') is not null
+  and to_regprocedure('private.delete_warning(bigint)') is not null
+  and has_function_privilege('authenticated','public.delete_warning(bigint)','EXECUTE'),
+  'warning deletion compatibility RPC remains callable for a clear denial');
 select ok(not exists(select 1 from pg_catalog.pg_proc p
   join pg_catalog.pg_namespace n on n.oid=p.pronamespace
   where n.nspname='public' and has_function_privilege('authenticated',p.oid,'EXECUTE')
@@ -80,7 +89,6 @@ select ok(not exists(select 1 from pg_catalog.pg_proc p
       'public.change_event_signup(bigint,bigint,boolean)'::regprocedure,
       'public.bulk_add_event_officers(bigint,bigint[])'::regprocedure,
       'public.save_officer(text,bigint,text,bigint[],bigint,text,text,text)'::regprocedure,
-      'public.save_event(text,text,bigint,text,timestamptz,timestamptz,bigint[],bigint)'::regprocedure,
       'public.claim_current_officer_identity()'::regprocedure,
       'public.set_officer_application_role(bigint,text)'::regprocedure,
       'public.cancel_event(bigint)'::regprocedure,
@@ -100,17 +108,26 @@ select ok(not exists(select 1 from pg_catalog.pg_proc p
       'public.create_warning(bigint,text)'::regprocedure,
       'public.decide_warning(bigint,text)'::regprocedure,
       'public.delete_warning(bigint)'::regprocedure,
+      'public.void_warning(bigint)'::regprocedure,
       'public.remove_event(bigint)'::regprocedure,
       'public.update_point_transaction(bigint,numeric)'::regprocedure,
       'public.remove_point_transaction(bigint)'::regprocedure,
       'public.save_event_with_links(text,text,bigint,text,date,timestamptz,timestamptz,bigint[],bigint,text,text)'::regprocedure,
+      'public.save_event_with_signup_sheet(text,text,bigint,text,date,timestamptz,timestamptz,bigint[],text,bigint,text,text)'::regprocedure,
       'public.save_task(text,text,text,bigint,date,numeric,boolean)'::regprocedure,
-      'public.assign_task(bigint,bigint)'::regprocedure,
       'public.create_recurring_event(text,text,bigint,text,bigint[],text,text,uuid,text,date[],timestamptz[],timestamptz[])'::regprocedure
+      ,'public.create_recurring_event(text,text,bigint,text,bigint[],text,text,text,uuid,text,date[],timestamptz[],timestamptz[])'::regprocedure
       ,'public.create_recurring_task(text,text,text,bigint,numeric,boolean,uuid,text,date[])'::regprocedure
       ,'public.remove_task(bigint)'::regprocedure
+      ,'public.restore_event_archive(bigint)'::regprocedure
+      ,'public.restore_task(bigint)'::regprocedure
       ,'public.mutate_recurring_event(bigint,text,text,uuid,bigint,integer,jsonb,text,date[])'::regprocedure
       ,'public.mutate_recurring_task(bigint,text,text,uuid,bigint,integer,jsonb,text,date[])'::regprocedure
+      ,'public.set_task_event_links(bigint[],bigint[])'::regprocedure
+      ,'public.save_task_with_events(text,text,text,bigint,date,numeric,boolean,bigint[])'::regprocedure
+      ,'public.create_recurring_task_with_events(text,text,text,bigint,numeric,boolean,uuid,text,date[],bigint[])'::regprocedure
+      ,'public.update_task_details_with_events(bigint,text,text,text,bigint,date,numeric,bigint[])'::regprocedure
+      ,'public.mutate_recurring_task_with_events(bigint,text,text,uuid,bigint,integer,jsonb,text,date[],bigint[])'::regprocedure
       ,'public.self_assign_task(bigint)'::regprocedure
       ,'public.bulk_assign_task_officers(bigint,bigint[])'::regprocedure
       ,'public.set_task_assignment_completion(bigint,bigint,boolean)'::regprocedure
@@ -122,6 +139,13 @@ select ok(not exists(select 1 from pg_catalog.pg_proc p
       ,'public.set_presenter_slots(bigint,text[])'::regprocedure
       ,'public.change_presenter_slot(bigint,text,bigint,boolean)'::regprocedure
       ,'public.update_presenter_slot_details(bigint,text,text,text)'::regprocedure
+      ,'public.set_branch_active(bigint,boolean)'::regprocedure
+      ,'public.set_position_active(bigint,boolean)'::regprocedure
+      ,'public.event_signup_counts()'::regprocedure
+      ,'public.leave_event_waitlist(bigint,bigint)'::regprocedure
+      ,'public.save_event_with_capacity(text,text,bigint,text,date,timestamptz,timestamptz,bigint[],text,integer,bigint,text,text)'::regprocedure
+      ,'public.create_recurring_event_with_capacity(text,text,bigint,text,bigint[],text,text,text,integer,uuid,text,date[],timestamptz[],timestamptz[])'::regprocedure
+      ,'public.mutate_recurring_event_with_capacity(bigint,text,text,uuid,bigint,integer,jsonb,text,date[],boolean,integer)'::regprocedure
     )), 'authenticated has no unreviewed public RPC entry point');
 
 -- Fixtures are inserted as database owner. Every probe below changes to the
@@ -246,9 +270,16 @@ select throws_ok($$delete from point_transactions where id=-401$$,
   '42501',null,'admin cannot erase point history directly');
 select throws_ok($$delete from audit_logs where id=-401$$,
   '42501',null,'admin cannot delete audit history directly');
+select throws_ok($$delete from officer_warnings where id=-401$$,
+  '42501',null,'admin cannot physically delete warning history');
+select throws_ok($$select delete_warning(-401)$$,
+  'P0001','Warning deletion is disabled; void instead',
+  'Admin compatibility RPC is callable but cannot delete warning history');
+select is((select count(*) from officer_warnings where id=-401),1::bigint,
+  'warning row remains after a rejected compatibility deletion');
 select lives_ok($$select save_officer('RLS created',17,'active',null,null,'rls-created@example.org')$$,
   'admin officer-save RPC still works after raw writes are revoked');
-select lives_ok($$select save_event('RLS admin event','Test event',(select id from event_types where name='Meeting'),'TBA','2099-09-22 09:00-06','2099-09-22 10:00-06',null)$$,
+select lives_ok($$select save_event_with_links('RLS admin event','Test event',(select id from event_types where name='Meeting'),'TBA','2099-09-22'::date,'2099-09-22 09:00-06','2099-09-22 10:00-06',null)$$,
   'admin event-save RPC still creates global events');
 select lives_ok($$select add_manual_transaction(-403,1,'RLS admin correction','correction')$$,
   'admin points RPC still works');

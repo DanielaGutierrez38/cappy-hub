@@ -2,7 +2,7 @@ import type { Tables } from "./database.types";
 import { currentDenverWeek } from "./current-denver-week";
 
 export type EventListStatus =
-  "upcoming" | "happening" | "past" | "cancelled" | undefined;
+  "upcoming" | "happening" | "past" | "cancelled" | "archived" | undefined;
 
 export type EventListItem = Pick<
   Tables<"events">,
@@ -14,11 +14,31 @@ export type EventListItem = Pick<
   | "status"
   | "deleted_at"
   | "participation_points_per_hour_at_end"
+  | "max_volunteers"
 > & {
   event_types: { name: string };
   event_branches: { branches: { name: string } }[];
   event_officers: { officer_id: number }[];
+  event_waitlist?: { officer_id: number }[];
+  confirmed_count?: number;
+  waitlist_count?: number;
 };
+
+export function eventSignupCountLabel(event: {
+  max_volunteers: number | null;
+  confirmed_count?: number;
+  waitlist_count?: number;
+}) {
+  const confirmedCount = event.confirmed_count ?? 0;
+  const waitlistCount = event.waitlist_count ?? 0;
+  const confirmed =
+    event.max_volunteers == null
+      ? `${confirmedCount} ${confirmedCount === 1 ? "officer" : "officers"}`
+      : `${confirmedCount} / ${event.max_volunteers} confirmed`;
+  return waitlistCount > 0
+    ? `${confirmed} · ${waitlistCount} waitlisted`
+    : confirmed;
+}
 
 export function organizeEventList(
   events: EventListItem[],
@@ -28,6 +48,7 @@ export function organizeEventList(
   const nowMs = now.getTime();
   const { today, sunday } = currentDenverWeek(now);
   const visible = events.filter((event) => {
+    if (status === "archived") return event.deleted_at !== null;
     if (event.deleted_at) return false;
     if (status === "cancelled") return event.status === "cancelled";
     if (event.status === "cancelled") return false;
@@ -43,7 +64,7 @@ export function organizeEventList(
 
   const sort = (left: EventListItem, right: EventListItem) => {
     if (status === "past") return right.ends_at.localeCompare(left.ends_at);
-    if (status === "cancelled") {
+    if (status === "cancelled" || status === "archived") {
       return (
         right.event_date.localeCompare(left.event_date) ||
         right.starts_at.localeCompare(left.starts_at)

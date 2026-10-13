@@ -1,9 +1,19 @@
 "use client";
-import { useActionState } from "react";
+import {
+  useActionState,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { ActionFeedback, FieldError } from "@/components/ui";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { initialFormActionState, submittedValue } from "@/lib/form-feedback";
 import { editPointTransaction, removePointTransaction } from "./actions";
+import {
+  usePointHistoryAmount,
+  useSetPointHistoryAmount,
+} from "./point-history-state";
 
 export default function PointActions({
   transactionId,
@@ -12,49 +22,50 @@ export default function PointActions({
   transactionId: number;
   points: number;
 }) {
-  const [editState, editAction, editing] = useActionState(
-    editPointTransaction,
-    initialFormActionState,
-  );
   const [removeState, removeAction, removing] = useActionState(
     removePointTransaction,
     initialFormActionState,
   );
-  const fieldErrors = editState.fieldErrors ?? {};
+  const [editing, setEditing] = useState(false);
+  const [editSuccess, setEditSuccess] = useState("");
+  const currentPoints = usePointHistoryAmount(transactionId, points);
+  const setAmount = useSetPointHistoryAmount();
+  const handleEditSuccess = useCallback(
+    (amount: number, message: string) => {
+      setAmount(transactionId, amount);
+      setEditSuccess(message);
+      setEditing(false);
+    },
+    [setAmount, transactionId],
+  );
+  const editTrigger = useRef<HTMLButtonElement>(null);
+  const wasEditing = useRef(false);
+
+  useEffect(() => {
+    if (wasEditing.current && !editing) editTrigger.current?.focus();
+    wasEditing.current = editing;
+  }, [editing]);
+
   return (
-    <div className="space-y-2">
-      <form
-        action={editAction}
-        className="flex min-w-0 flex-wrap items-end gap-2"
-      >
-        <input type="hidden" name="transaction_id" value={transactionId} />
-        <label className="min-w-0 flex-1">
-          Points
-          <input
-            name="points"
-            type="number"
-            step="any"
-            required
-            aria-invalid={Boolean(fieldErrors.points)}
-            aria-describedby={
-              fieldErrors.points
-                ? `transaction-${transactionId}-points-error`
-                : undefined
-            }
-            defaultValue={submittedValue(
-              editState.values,
-              "points",
-              String(points),
-            )}
-          />
-          <FieldError id={`transaction-${transactionId}-points-error`}>
-            {fieldErrors.points}
-          </FieldError>
-        </label>
-        <button disabled={editing}>{editing ? "Saving…" : "Edit"}</button>
-      </form>
-      <ActionFeedback state={editState} />
-      <form action={removeAction}>
+    <div className="point-actions">
+      {editing ? (
+        <EditPointForm
+          transactionId={transactionId}
+          points={currentPoints}
+          onCancel={() => setEditing(false)}
+          onSuccess={handleEditSuccess}
+        />
+      ) : (
+        <button
+          ref={editTrigger}
+          type="button"
+          className="button-secondary"
+          onClick={() => setEditing(true)}
+        >
+          Edit points
+        </button>
+      )}
+      <form action={removeAction} className="point-remove-form">
         <input type="hidden" name="transaction_id" value={transactionId} />
         <ConfirmationDialog
           title="Remove Point transaction?"
@@ -67,6 +78,86 @@ export default function PointActions({
         />
       </form>
       <ActionFeedback state={removeState} />
+      {editSuccess && (
+        <ActionFeedback state={{ error: "", success: editSuccess }} />
+      )}
     </div>
+  );
+}
+
+function EditPointForm({
+  transactionId,
+  points,
+  onCancel,
+  onSuccess,
+}: {
+  transactionId: number;
+  points: number;
+  onCancel: () => void;
+  onSuccess: (amount: number, message: string) => void;
+}) {
+  const [editState, editAction, pending] = useActionState(
+    editPointTransaction,
+    initialFormActionState,
+  );
+  const input = useRef<HTMLInputElement>(null);
+  const proposedAmount = useRef(points);
+  const fieldErrors = editState.fieldErrors ?? {};
+
+  useEffect(() => input.current?.focus(), []);
+  useEffect(() => {
+    if (editState.success) onSuccess(proposedAmount.current, editState.success);
+  }, [editState.success, onSuccess]);
+
+  return (
+    <form
+      key={JSON.stringify(editState.values ?? {})}
+      action={editAction}
+      onSubmit={(event) => {
+        const formData = new FormData(event.currentTarget);
+        proposedAmount.current = Number(formData.get("points"));
+      }}
+      onReset={(event) => event.preventDefault()}
+      className="point-edit-form"
+    >
+      <input type="hidden" name="transaction_id" value={transactionId} />
+      <span className="text-muted" aria-live="polite">
+        Current amount: {points} points
+      </span>
+      <label>
+        Proposed amount
+        <input
+          ref={input}
+          name="points"
+          type="number"
+          step="any"
+          required
+          aria-invalid={Boolean(fieldErrors.points)}
+          aria-describedby={
+            fieldErrors.points
+              ? `transaction-${transactionId}-points-error`
+              : undefined
+          }
+          defaultValue={submittedValue(
+            editState.values,
+            "points",
+            String(points),
+          )}
+        />
+        <FieldError id={`transaction-${transactionId}-points-error`}>
+          {fieldErrors.points}
+        </FieldError>
+      </label>
+      <button disabled={pending}>{pending ? "Saving…" : "Save points"}</button>
+      <button
+        type="button"
+        className="button-secondary"
+        disabled={pending}
+        onClick={onCancel}
+      >
+        Cancel
+      </button>
+      <ActionFeedback state={editState} />
+    </form>
   );
 }

@@ -128,9 +128,10 @@ update tasks set due_date=(pg_catalog.statement_timestamp() at time zone 'Americ
 select is((select count(distinct recurrence_series_id) from tasks where recurrence_key between '2099-09-21' and '2099-09-28'),1::bigint,
   'Task occurrences share only their series metadata');
 set local role authenticated;
-select lives_ok($$select assign_task((select id from tasks where recurrence_key='2099-09-21'),-982)$$,
+select lives_ok($$select bulk_assign_task_officers(
+  (select id from tasks where recurrence_key='2099-09-21'),array[-982]::bigint[])$$,
   'one Task occurrence can be assigned independently');
-select is((select count(*) from task_assignments a join tasks t on t.id=a.task_id
+select is((select count(*) from task_officer_assignments a join tasks t on t.id=a.task_id
   where t.recurrence_key='2099-09-23'),0::bigint,
   'assignment does not leak to another Task occurrence');
 select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000000981',true);
@@ -149,11 +150,13 @@ select is((select count(*) from point_transactions p join tasks t on t.id=p.task
   'Task point award uniqueness prevents duplicate occurrence points');
 select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000000981',true);
 set local role authenticated;
-select lives_ok($$select assign_task((select id from tasks where recurrence_key='2099-09-23'),-982)$$,
+select lives_ok($$select bulk_assign_task_officers(
+  (select id from tasks where recurrence_key='2099-09-23'),array[-982]::bigint[])$$,
   'an unfinished recurring Task can have an assignment before removal');
 select lives_ok($$select remove_task((select id from tasks where recurrence_key='2099-09-23'))$$,
   'an unfinished Task occurrence can be removed independently');
-select throws_ok($$select assign_task((select id from tasks where recurrence_key='2099-09-23'),-982)$$,
+select throws_ok($$select bulk_assign_task_officers(
+  (select id from tasks where recurrence_key='2099-09-23'),array[-982]::bigint[])$$,
   'P0001','Task has been removed','removed Task cannot be assigned through the RPC');
 select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000000981',true);
 select throws_ok($$select set_task_assignment_completion(
@@ -162,7 +165,7 @@ select throws_ok($$select set_task_assignment_completion(
 reset role;
 select isnt((select removed_at from tasks where recurrence_key='2099-09-23'),null::timestamptz,
   'removed occurrence is retained with a removal timestamp');
-select is((select completed_at from task_assignments where task_id=
+select is((select completed_at from task_officer_assignments where task_id=
   (select id from tasks where recurrence_key='2099-09-23')),null::timestamptz,
   'blocked completion leaves the Task unfinished');
 select is((select count(*) from point_transactions where task_id=
@@ -178,8 +181,8 @@ select is((select count(*) from audit_logs where entity_type='event' and entity_
   (select id::text from events where recurrence_key='2099-03-06') and action='event.cancelled'),1::bigint,
   'cancellation audit identifies the individual Event occurrence');
 select is((select count(*) from audit_logs where entity_type='task' and entity_id=
-  (select id::text from tasks where recurrence_key='2099-09-23') and action='task.removed'),1::bigint,
-  'removal audit identifies the individual Task occurrence');
+  (select id::text from tasks where recurrence_key='2099-09-23') and action='task.archived'),1::bigint,
+  'archive audit identifies the individual Task occurrence');
 select is((select count(*) from audit_logs where action in ('event.series_created','task.series_created')),
   2::bigint,'both recurrence series have audit records');
 

@@ -1,8 +1,12 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useRef, useState } from "react";
 import type { Tables } from "@/lib/database.types";
-import { initialFormActionState, submittedValue } from "@/lib/form-feedback";
+import {
+  initialFormActionState,
+  submittedValue,
+  submittedValues,
+} from "@/lib/form-feedback";
 import { ActionFeedback, FieldError } from "@/components/ui";
 import {
   RecurrenceScope,
@@ -11,16 +15,28 @@ import {
 } from "@/components/recurrence-scope";
 import { createTask, editRecurringTask, editStandaloneTask } from "./actions";
 import { RecurrenceFields } from "@/components/recurrence-fields";
+import { TASK_TYPES } from "@/lib/task-types";
+import { TaskEventCombobox } from "@/components/task-event-combobox";
 
 export default function TaskCreateForm({
   returnTo,
   branches,
+  events = [],
+  taskEventIds = [],
   recurrenceRequestKey,
   task,
   series,
 }: {
   returnTo?: string;
   branches: { id: number; name: string }[];
+  events?: {
+    id: number;
+    name: string;
+    event_date: string;
+    status: string;
+    deleted_at: string | null;
+  }[];
+  taskEventIds?: number[];
   recurrenceRequestKey: string;
   task?: Tables<"tasks">;
   series?: RecurrenceSeries;
@@ -31,6 +47,13 @@ export default function TaskCreateForm({
   );
   const fieldErrors = state.fieldErrors ?? {};
   const [editedFields, setEditedFields] = useState<string[]>([]);
+  const initialEventIds = submittedValues(
+    state.values,
+    "event_ids",
+    taskEventIds.map(String),
+  );
+  const selectedEventIds = useRef(initialEventIds);
+  const formRef = useRef<HTMLFormElement>(null);
   const original: Record<string, string | string[]> = task
     ? {
         title: task.title,
@@ -39,16 +62,31 @@ export default function TaskCreateForm({
         branch_id: String(task.branch_id),
         due_date: task.due_date,
         points: String(task.points),
+        event_ids: taskEventIds.map(String),
       }
     : {};
+
+  function updateEditedFields() {
+    if (!task || !formRef.current) return;
+    const changed = changedFormFields(formRef.current, original).filter(
+      (field) => field !== "event_ids",
+    );
+    const originalEventIds = [...(original.event_ids as string[])].sort();
+    if (
+      JSON.stringify([...selectedEventIds.current].sort()) !==
+      JSON.stringify(originalEventIds)
+    ) {
+      changed.push("event_ids");
+    }
+    setEditedFields(changed);
+  }
+
   return (
     <form
+      ref={formRef}
       action={action}
-      className="space-y-4 max-w-xl"
-      onChange={(event) => {
-        if (task)
-          setEditedFields(changedFormFields(event.currentTarget, original));
-      }}
+      className="task-form grid max-w-6xl grid-cols-2 gap-x-6 gap-y-4"
+      onChange={updateEditedFields}
     >
       {returnTo && <input type="hidden" name="returnTo" value={returnTo} />}
       {task && <input type="hidden" name="task_id" value={task.id} />}
@@ -70,27 +108,30 @@ export default function TaskCreateForm({
         <input key={field} type="hidden" name="edited_fields" value={field} />
       ))}
       {series && (
-        <RecurrenceScope
-          series={series}
-          requestKey={recurrenceRequestKey}
-          recordType="Task"
-          editing
-          selectedKey={task?.recurrence_key}
-          selectedDate={task?.due_date}
-          values={state.values}
-          fieldErrors={fieldErrors}
-        />
+        <div className="col-span-2">
+          <RecurrenceScope
+            series={series}
+            requestKey={recurrenceRequestKey}
+            recordType="Task"
+            editing
+            selectedKey={task?.recurrence_key}
+            selectedDate={task?.due_date}
+            values={state.values}
+            fieldErrors={fieldErrors}
+          />
+        </div>
       )}
       <input
         type="hidden"
         name="recurrence_request_key"
         value={recurrenceRequestKey}
       />
-      <label>
+      <label className="task-form-title self-start">
         Title
         <input
           name="title"
           required
+          className="h-10 text-base font-medium"
           aria-invalid={Boolean(fieldErrors.title)}
           aria-describedby={fieldErrors.title ? "task-title-error" : undefined}
           defaultValue={submittedValue(
@@ -101,7 +142,7 @@ export default function TaskCreateForm({
         />
         <FieldError id="task-title-error">{fieldErrors.title}</FieldError>
       </label>
-      <label>
+      <label className="task-form-description self-start">
         Description
         <textarea
           name="description"
@@ -138,7 +179,7 @@ export default function TaskCreateForm({
           <option value="" disabled>
             Select task type
           </option>
-          {["Flyer", "LinkedIn", "Airtable", "Story", "Post"].map((type) => (
+          {TASK_TYPES.map((type) => (
             <option key={type}>{type}</option>
           ))}
         </select>
@@ -208,16 +249,31 @@ export default function TaskCreateForm({
         />
         <FieldError id="task-points-error">{fieldErrors.points}</FieldError>
       </label>
+      <TaskEventCombobox
+        events={events}
+        initialSelectedIds={initialEventIds}
+        error={fieldErrors.event_ids}
+        onSelectionChange={(ids) => {
+          selectedEventIds.current = ids;
+          updateEditedFields();
+        }}
+      />
       {!task && (
-        <RecurrenceFields
-          recordType="Task"
-          values={state.values}
-          fieldErrors={fieldErrors}
-          firstDate={submittedValue(state.values, "due_date", "")}
-        />
+        <div className="col-span-2">
+          <RecurrenceFields
+            recordType="Task"
+            values={state.values}
+            fieldErrors={fieldErrors}
+            firstDate={submittedValue(state.values, "due_date", "")}
+          />
+        </div>
       )}
-      <ActionFeedback state={state} />
-      <button disabled={pending}>
+      {(state.error || state.success) && (
+        <div className="col-span-2">
+          <ActionFeedback state={state} />
+        </div>
+      )}
+      <button disabled={pending} className="lg:justify-self-start">
         {pending
           ? task
             ? "Saving…"

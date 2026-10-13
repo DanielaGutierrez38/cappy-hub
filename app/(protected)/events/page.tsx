@@ -22,7 +22,11 @@ import { searchOrFilter } from "@/lib/list-search";
 import { eventListFiltersSchema } from "./filter-validation";
 import { currentDenverWeek } from "@/lib/current-denver-week";
 import { SelfSignupForm } from "./event-controls";
-import { organizeEventList, type EventListItem } from "@/lib/event-list";
+import {
+  eventSignupCountLabel,
+  organizeEventList,
+  type EventListItem,
+} from "@/lib/event-list";
 
 type EventListSearchParams = Record<string, string | string[] | undefined>;
 
@@ -34,18 +38,32 @@ export default async function EventsPage({
   const actor = await getAuthorizationContext();
   const params = await searchParams;
   const parsedFilters = eventListFiltersSchema.parse(params);
+  const mayBrowseArchived =
+    canSeeAllBranches(actor) || (isLead(actor) && actor.branchIds.length > 0);
+  const status =
+    parsedFilters.status === "archived" && !mayBrowseArchived
+      ? undefined
+      : parsedFilters.status;
   const returnTo = listReturnUrl("/events", {
     ...params,
-    status: parsedFilters.status,
+    status,
   });
-  const status = parsedFilters.status;
   const { q: search, type: typeId, branch: branchId } = parsedFilters;
   const now = new Date();
   const nowIso = now.toISOString();
   const { today } = currentDenverWeek(now);
   const supabase = await createClient();
   const eventSelection =
-    "*,event_types(name),event_branches(branch_id,branches(name)),filter_branch:event_branches(branch_id),event_officers(officer_id)";
+    "*,event_types(name),event_branches(branch_id,branches(name)),filter_branch:event_branches(branch_id),event_officers(officer_id),event_waitlist(officer_id)";
+  const authorizedEventIds =
+    status === "archived" && isLead(actor) && !canSeeAllBranches(actor)
+      ? await supabase
+          .from("event_branches")
+          .select("event_id")
+          .in("branch_id", actor.branchIds)
+      : undefined;
+  if (authorizedEventIds?.error)
+    throw new Error("Failed to load archived Events");
 
   const buildEventQuery = (countOnly = false) => {
     let query = supabase
@@ -54,7 +72,17 @@ export default async function EventsPage({
         eventSelection,
         countOnly ? { count: "exact", head: true } : undefined,
       );
-    query = query.is("deleted_at", null);
+    query =
+      status === "archived"
+        ? query.not("deleted_at", "is", null)
+        : query.is("deleted_at", null);
+    if (authorizedEventIds)
+      query = query.in(
+        "id",
+        authorizedEventIds.data.length
+          ? authorizedEventIds.data.map(({ event_id }) => event_id)
+          : [-1],
+      );
 
     if (status === undefined)
       query = query
@@ -72,6 +100,10 @@ export default async function EventsPage({
     if (status === "past")
       query = query.neq("status", "cancelled").lte("ends_at", nowIso);
     if (status === "cancelled") query = query.eq("status", "cancelled");
+    if (status === "archived" && branchId !== undefined)
+      query = query
+        .eq("filter_branch.branch_id", branchId)
+        .not("filter_branch", "is", null);
 
     if (!countOnly) {
       if (search)
@@ -93,68 +125,94 @@ export default async function EventsPage({
     return query;
   };
 
-  const [eventsResult, eventCountResult, eventTypesResult, branchesResult] =
-    await Promise.all([
-      buildEventQuery(),
-      buildEventQuery(true),
-      supabase.from("event_types").select("id,name").order("name"),
-      supabase.from("branches").select("id,name").order("name"),
-    ]);
+  const [
+    eventsResult,
+    eventCountResult,
+    eventTypesResult,
+    branchesResult,
+    countsResult,
+  ] = await Promise.all([
+    buildEventQuery(),
+    buildEventQuery(true),
+    supabase.from("event_types").select("id,name").order("name"),
+    supabase.from("branches").select("id,name").order("name"),
+    supabase.rpc("event_signup_counts"),
+  ]);
   if (
     eventsResult.error ||
     eventCountResult.error ||
     eventTypesResult.error ||
-    branchesResult.error
+    branchesResult.error ||
+    countsResult.error
   )
     throw new Error("Failed to load events");
 
-  const events = eventsResult.data as EventListItem[];
+  const counts = new Map(countsResult.data.map((row) => [row.event_id, row]));
+  const events = (eventsResult.data as EventListItem[]).map((event) => ({
+    ...event,
+    confirmed_count: Number(
+      counts.get(event.id)?.confirmed_count ?? event.event_officers.length,
+    ),
+    waitlist_count: Number(counts.get(event.id)?.waitlist_count ?? 0),
+  }));
   const organizedEvents = organizeEventList(events, status, now);
   const splitEvents = (items: EventListItem[]) => ({
-    your: items.filter((event) =>
-      event.event_officers.some((signup) => signup.officer_id === actor.id),
+    your: items.filter(
+      (event) =>
+        event.event_officers.some((signup) => signup.officer_id === actor.id) ||
+        (event.event_waitlist ?? []).some(
+          (entry) => entry.officer_id === actor.id,
+        ),
     ),
     other: items.filter(
       (event) =>
-        !event.event_officers.some((signup) => signup.officer_id === actor.id),
+        !event.event_officers.some(
+          (signup) => signup.officer_id === actor.id,
+        ) &&
+        !(event.event_waitlist ?? []).some(
+          (entry) => entry.officer_id === actor.id,
+        ),
     ),
   });
   const hasFilters = Boolean(search || status || typeId || branchId);
   const maySignUp = (title: string) =>
     title === "Other events" &&
     (status === undefined || status === "upcoming" || status === "happening");
-  const renderGroup = (title: string, groupEvents: EventListItem[]) => (
-    <section key={title} aria-label={title} className="space-y-3">
-      <h3 className="font-semibold text-foreground">{title}</h3>
+  const renderGroup = (
+    title: string,
+    groupEvents: EventListItem[],
+    period: string,
+  ) => (
+    <section
+      key={`${period}-${title}`}
+      aria-label={`${period} — ${title}`}
+      className={groupEvents.length ? "space-y-3" : "space-y-1"}
+    >
+      {groupEvents.length > 0 && (
+        <h3 className="font-semibold text-foreground">{title}</h3>
+      )}
       {!groupEvents.length ? (
-        <p>No events in this group.</p>
+        <p className="text-sm text-muted">
+          <span className="font-semibold text-foreground">{title}:</span> No
+          events in this group.
+        </p>
       ) : (
-        <TableFrame compact>
+        <TableFrame compact label={`Events table: ${period} — ${title}`}>
           <table>
             <thead>
-              <tr className="grid grid-cols-1 md:table-row">
+              <tr>
                 <th scope="col">Event</th>
-                <th scope="col" className="hidden xl:table-cell">
-                  Schedule (El Paso)
-                </th>
-                <th scope="col" className="hidden xl:table-cell">
-                  Type
-                </th>
-                <th scope="col" className="hidden xl:table-cell">
-                  Branches
-                </th>
-                <th scope="col" className="hidden xl:table-cell">
-                  Officers
-                </th>
-                <th scope="col" className="hidden xl:table-cell">
-                  Status
-                </th>
+                <th scope="col">Schedule (El Paso)</th>
+                <th scope="col">Type</th>
+                <th scope="col">Branches</th>
+                <th scope="col">Officers</th>
+                <th scope="col">Status</th>
                 {maySignUp(title) && <th scope="col">Action</th>}
               </tr>
             </thead>
             <tbody>
               {groupEvents.map((event) => (
-                <tr key={event.id} className="grid grid-cols-1 md:table-row">
+                <tr key={event.id}>
                   <td className="min-w-0">
                     <Link
                       href={withReturnTo(`/events/${event.id}`, returnTo)}
@@ -162,52 +220,40 @@ export default async function EventsPage({
                     >
                       {event.name}
                     </Link>
-                    <div className="mt-2 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted xl:hidden">
-                      <span>
-                        {formatEventSchedule(event.starts_at, event.ends_at)}
-                      </span>
-                      <span>{event.event_types.name}</span>
-                      <BranchBadges
-                        branches={event.event_branches.map(
-                          (eventBranch) => eventBranch.branches.name,
-                        )}
-                      />
-                      <span>
-                        {event.event_officers.length}{" "}
-                        {event.event_officers.length === 1
-                          ? "officer"
-                          : "officers"}
-                      </span>
-                      <StatusBadge status={eventStatus(event, now.getTime())} />
-                    </div>
                   </td>
-                  <td className="hidden xl:table-cell">
-                    {formatEventSchedule(event.starts_at, event.ends_at)}
-                  </td>
-                  <td className="hidden xl:table-cell">
-                    {event.event_types.name}
-                  </td>
-                  <td className="hidden xl:table-cell">
+                  <td>{formatEventSchedule(event.starts_at, event.ends_at)}</td>
+                  <td>{event.event_types.name}</td>
+                  <td>
                     <BranchBadges
                       branches={event.event_branches.map(
                         (eventBranch) => eventBranch.branches.name,
                       )}
                     />
                   </td>
-                  <td className="hidden xl:table-cell tabular-nums">
-                    {event.event_officers.length}
+                  <td className="tabular-nums">
+                    {eventSignupCountLabel(event)}
                   </td>
-                  <td className="hidden xl:table-cell">
+                  <td>
                     <StatusBadge status={eventStatus(event, now.getTime())} />
                   </td>
                   {maySignUp(title) && (
                     <td className="min-w-0">
-                      {eventSignupOpen(event, now.getTime()) && (
-                        <SelfSignupForm
-                          eventId={event.id}
-                          eventName={event.name}
-                        />
-                      )}
+                      {eventSignupOpen(event, now.getTime()) &&
+                        ((event.event_waitlist ?? []).some(
+                          (entry) => entry.officer_id === actor.id,
+                        ) ? (
+                          <span>Waitlisted</span>
+                        ) : (
+                          <SelfSignupForm
+                            eventId={event.id}
+                            eventName={event.name}
+                            full={
+                              event.max_volunteers != null &&
+                              (event.confirmed_count ?? 0) >=
+                                event.max_volunteers
+                            }
+                          />
+                        ))}
                     </td>
                   )}
                 </tr>
@@ -238,7 +284,7 @@ export default async function EventsPage({
         active={hasFilters}
         clearHref="/events"
       >
-        <label className="w-full min-w-0 sm:w-auto sm:min-w-56 sm:flex-1">
+        <label className="min-w-56 flex-1">
           Search events
           <input
             type="search"
@@ -248,7 +294,7 @@ export default async function EventsPage({
             placeholder="Name, description, or location"
           />
         </label>
-        <label className="w-full min-w-0 sm:w-auto sm:min-w-40">
+        <label className="min-w-40">
           Status
           <select name="status" defaultValue={status ?? ""}>
             <option value="">Current events</option>
@@ -256,9 +302,10 @@ export default async function EventsPage({
             <option value="happening">Happening</option>
             <option value="past">Past</option>
             <option value="cancelled">Cancelled</option>
+            {mayBrowseArchived && <option value="archived">Archived</option>}
           </select>
         </label>
-        <label className="w-full min-w-0 sm:w-auto sm:min-w-40">
+        <label className="min-w-40">
           Event type
           <select name="type" defaultValue={typeId ?? ""}>
             <option value="">All event types</option>
@@ -269,7 +316,7 @@ export default async function EventsPage({
             ))}
           </select>
         </label>
-        <label className="w-full min-w-0 sm:w-auto sm:min-w-40">
+        <label className="min-w-40">
           Branch
           <select name="branch" defaultValue={branchId ?? ""}>
             <option value="">All branches</option>
@@ -300,10 +347,12 @@ export default async function EventsPage({
                     {renderGroup(
                       "Your events",
                       splitEvents(organizedEvents.thisWeek).your,
+                      "Events this week",
                     )}
                     {renderGroup(
                       "Other events",
                       splitEvents(organizedEvents.thisWeek).other,
+                      "Events this week",
                     )}
                   </>
                 )}
@@ -317,10 +366,12 @@ export default async function EventsPage({
                     {renderGroup(
                       "Your events",
                       splitEvents(organizedEvents.upcoming).your,
+                      "Upcoming Events",
                     )}
                     {renderGroup(
                       "Other events",
                       splitEvents(organizedEvents.upcoming).other,
+                      "Upcoming Events",
                     )}
                   </>
                 )}
@@ -336,14 +387,21 @@ export default async function EventsPage({
               ? "No past events."
               : status === "cancelled"
                 ? "No cancelled events."
-                : "No events in this group."}
+                : status === "archived"
+                  ? "No archived Events."
+                  : "No events in this group."}
         </p>
       ) : (
         <>
-          {renderGroup("Your events", splitEvents(organizedEvents.events).your)}
+          {renderGroup(
+            "Your events",
+            splitEvents(organizedEvents.events).your,
+            "Events",
+          )}
           {renderGroup(
             "Other events",
             splitEvents(organizedEvents.events).other,
+            "Events",
           )}
         </>
       )}

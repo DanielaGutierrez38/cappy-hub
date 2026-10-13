@@ -12,7 +12,7 @@ vi.mock("@/app/(protected)/tasks/actions", () => ({
 vi.mock("@/app/(protected)/officers/warning-actions", () => ({
   createWarning: vi.fn(),
   decideWarning: vi.fn(),
-  deleteWarning: vi.fn(),
+  voidWarning: vi.fn(),
 }));
 vi.mock("@/app/(protected)/points/actions", () => ({
   editPointTransaction: vi.fn(),
@@ -32,10 +32,11 @@ import {
 } from "@/app/(protected)/events/event-controls";
 import { TaskRemoveForm } from "@/app/(protected)/tasks/task-remove-form";
 import {
-  DeleteWarningForm,
+  VoidWarningForm,
   WarningDecisionForm,
 } from "@/app/(protected)/officers/warning-forms";
 import PointActions from "@/app/(protected)/points/point-actions";
+import { PointHistoryState } from "@/app/(protected)/points/point-history-state";
 
 const series = {
   id: 12,
@@ -139,8 +140,8 @@ it("shows action-specific Event cancel and removal confirmations", () => {
   expect(cancelHtml).toContain("Cancel Event?");
   expect(cancelHtml).toContain("This applies cancellation to the selected");
   expect(cancelHtml).toContain("This occurrence");
-  expect(removeHtml).toContain("Remove Event?");
-  expect(removeHtml).toContain("Existing protected history remains");
+  expect(removeHtml).toContain("Archive Event?");
+  expect(removeHtml).toContain("workflow history is preserved");
   expect(removeHtml).toContain("This occurrence");
 });
 
@@ -153,8 +154,10 @@ it("shows scope and protected-history consequences for recurring Task removal", 
     }),
   );
 
-  expect(html).toContain("Remove Task?");
-  expect(html).toContain("Protected completion and award history");
+  expect(html).toContain("Archive Task?");
+  expect(html).toContain(
+    "Assignments, completion, Points, and history are preserved",
+  );
   expect(html).toContain("This occurrence");
   expect(html).toContain("All occurrences");
 });
@@ -163,8 +166,8 @@ it("preserves warning decision submit values inside the dialogs", () => {
   const decisionHtml = renderToStaticMarkup(
     createElement(WarningDecisionForm, { warningId: 7 }),
   );
-  const deleteHtml = renderToStaticMarkup(
-    createElement(DeleteWarningForm, { warningId: 7, officerId: 3 }),
+  const voidHtml = renderToStaticMarkup(
+    createElement(VoidWarningForm, { warningId: 7, officerId: 3 }),
   );
 
   expect(decisionHtml).toContain("Approve warning?");
@@ -172,13 +175,17 @@ it("preserves warning decision submit values inside the dialogs", () => {
   expect(decisionHtml).toContain('name="decision"');
   expect(decisionHtml).toContain('value="approved"');
   expect(decisionHtml).toContain('value="rejected"');
-  expect(deleteHtml).toContain("Delete warning?");
-  expect(deleteHtml).toContain("Its System Log record remains.");
+  expect(voidHtml).toContain("Void warning?");
+  expect(voidHtml).toContain("cannot be undone");
 });
 
 it("explains that Point transaction removal is logical and retains feedback", () => {
   const pointHtml = renderToStaticMarkup(
-    createElement(PointActions, { transactionId: 8, points: 2 }),
+    createElement(
+      PointHistoryState,
+      { initialAmounts: [{ transactionId: 8, points: 2 }] },
+      createElement(PointActions, { transactionId: 8, points: 2 }),
+    ),
   );
   const feedbackHtml = renderToStaticMarkup(
     createElement("form", null, [
@@ -196,6 +203,11 @@ it("explains that Point transaction removal is logical and retains feedback", ()
   expect(pointHtml).toContain("Remove Point transaction?");
   expect(pointHtml).toContain("marks the Point transaction as removed");
   expect(pointHtml).toContain("The removal is recorded in the System Log.");
+  expect(pointHtml).toContain(
+    'type="button" class="button-secondary">Edit points</button>',
+  );
+  expect(pointHtml).not.toContain('name="points"');
+  expect(pointHtml).toContain(">Remove</button>");
   expect(feedbackHtml).toContain('role="status"');
   expect(feedbackHtml).toContain('role="alert"');
 });

@@ -1,5 +1,13 @@
 import { expect, it } from "vitest";
-import { presentAuditEntry } from "@/lib/system-log-presentation";
+import {
+  findAuditActionCodes,
+  presentAuditEntry,
+} from "@/lib/system-log-presentation";
+
+it("matches recognizable activity wording and raw action-code terms", () => {
+  expect(findAuditActionCodes("cancelled event")).toContain("event.cancelled");
+  expect(findAuditActionCodes("event.cancelled")).toContain("event.cancelled");
+});
 
 it.each([
   [
@@ -55,6 +63,22 @@ it("renders readable before and after values for an Officer role change", () => 
   expect(result.changes).toEqual([
     { label: "Application role", value: "Officer → Admin" },
   ]);
+});
+
+it("labels signup sheet URL audit changes for officers", () => {
+  const result = presentAuditEntry({
+    action: "event.links_updated",
+    entity_type: "event",
+    entity_id: 123,
+    details: {
+      before: { signup_sheet_url: null },
+      after: { signup_sheet_url: "https://example.com/signup" },
+    },
+  });
+  expect(result.changes).toContainEqual({
+    label: "External roster / signup sheet",
+    value: "none → https://example.com/signup",
+  });
 });
 
 it("uses lifecycle snapshots to show a readable Event status change", () => {
@@ -289,6 +313,36 @@ it("names the affected Officer in a warning entry", () => {
   expect(result.activity).toBe("Recorded a warning for Noel Lozano");
   expect(result.record.label).toBe("Noel Lozano");
   expect(result.detailSummary).toBe("Repeated missed deadlines");
+});
+
+it("keeps catalog rename activity and change details readable", () => {
+  const result = presentAuditEntry({
+    action: "event_type.renamed",
+    entity_type: "event_type",
+    entity_id: 12,
+    details: { old_name: "Workshop", new_name: "Technical Workshop" },
+  });
+
+  expect(result.activity).toBe("Renamed an event type · Technical Workshop");
+  expect(result.changes).toEqual([
+    { label: "Name", value: "Workshop → Technical Workshop" },
+  ]);
+});
+
+it.each([
+  ["branch.retired", "Retired a branch · Legacy catalog value"],
+  ["branch.reactivated", "Reactivated a branch · Legacy catalog value"],
+  ["position.retired", "Retired a position · Legacy catalog value"],
+  ["position.reactivated", "Reactivated a position · Legacy catalog value"],
+])("presents %s catalog lifecycle entries", (action, expectedActivity) => {
+  const result = presentAuditEntry({
+    action,
+    entity_type: action.startsWith("branch.") ? "branch" : "position",
+    entity_id: 12,
+    details: { name: "Legacy catalog value" },
+  });
+  expect(result.activity).toBe(expectedActivity);
+  expect(result.record.label).toBe("Legacy catalog value");
 });
 
 it("uses a safe fallback for unknown legacy actions and unfamiliar payloads", () => {

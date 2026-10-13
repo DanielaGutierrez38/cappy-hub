@@ -23,9 +23,13 @@ import {
   SuccessNotice,
   TableFrame,
 } from "@/components/ui";
-import { formatDate, formatLabel } from "@/lib/presentation";
+import {
+  formatCalendarDate,
+  formatDate,
+  formatLabel,
+} from "@/lib/presentation";
 import RoleForm from "./role-form";
-import { CreateWarningForm, DeleteWarningForm } from "../warning-forms";
+import { CreateWarningForm, VoidWarningForm } from "../warning-forms";
 
 export default async function OfficerDetailPage({
   params,
@@ -73,8 +77,6 @@ export default async function OfficerDetailPage({
       .order("id", { ascending: false })
       .limit(100),
   ]);
-  if (total.error || events.error || transactions.error)
-    throw new Error("Failed to load officer history");
   const showWarnings = isAdmin(actor) || actor.id === officer.id;
   const warnings = showWarnings
     ? await supabase
@@ -83,9 +85,8 @@ export default async function OfficerDetailPage({
         .eq("officer_id", officer.id)
         .order("created_at", { ascending: false })
     : null;
-  if (warnings?.error) throw new Error("Failed to load warnings");
   const visibleWarnings = warnings?.data ?? [];
-  const associatedEvents = events.data.filter(
+  const associatedEvents = (events.data ?? []).filter(
     ({ events: event }) =>
       event && !event.deleted_at && event.status !== "cancelled",
   );
@@ -94,17 +95,25 @@ export default async function OfficerDetailPage({
   )
     ? warningStatus
     : undefined;
-  const displayedWarnings =
-    isAdmin(actor) && selectedStatus
-      ? visibleWarnings.filter((warning) => warning.status === selectedStatus)
-      : visibleWarnings;
+  const warningHistoryMode =
+    isAdmin(actor) && ["active", "voided", "all"].includes(warningStatus ?? "")
+      ? warningStatus
+      : "active";
+  const displayedWarnings = visibleWarnings.filter((warning) => {
+    if (!isAdmin(actor)) return warning.voided_at === null;
+    if (warningHistoryMode === "voided") return warning.voided_at !== null;
+    if (warningHistoryMode === "all") return true;
+    return (
+      warning.voided_at === null &&
+      (!selectedStatus || warning.status === selectedStatus)
+    );
+  });
   const approvedCount = visibleWarnings.filter(
-    (warning) => warning.status === "approved",
+    (warning) => warning.status === "approved" && warning.voided_at === null,
   ).length;
   const approverNames = isAdmin(actor)
     ? await supabase.from("officers").select("id,name")
     : null;
-  if (approverNames?.error) throw new Error("Failed to load approver names");
   return (
     <div className="space-y-4">
       <ContextualBackLink href="/officers" returnTo={returnTo}>
@@ -123,7 +132,7 @@ export default async function OfficerDetailPage({
         }
       />
       <SuccessNotice status={context.feedback} />
-      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1.7fr)_minmax(18rem,1fr)]">
         <div className="min-w-0 space-y-4">
           <dl className="grid grid-cols-[7rem_minmax(0,1fr)] gap-x-5 gap-y-2 rounded-lg border border-border bg-surface/30 p-4 text-sm [&>dt]:mt-0 [&>dd]:mt-0 [&>dd]:min-w-0 [&>dd]:break-words">
             <dt>UTEP email</dt>
@@ -145,9 +154,15 @@ export default async function OfficerDetailPage({
                 : "Not specified"}
             </dd>
           </dl>
-          <p className="text-lg font-semibold text-foreground">
-            Total points: <PointValue value={total.data.total_points ?? 0} />
-          </p>
+          {total.error ? (
+            <p role="alert" className="text-sm">
+              Total points unavailable. Reload this page to retry.
+            </p>
+          ) : (
+            <p className="text-lg font-semibold text-foreground">
+              Total points: <PointValue value={total.data.total_points ?? 0} />
+            </p>
+          )}
         </div>
         <div className="min-w-0 space-y-4 rounded-lg border border-border p-4">
           <dl className="grid grid-cols-[7rem_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm [&>dt]:mt-0 [&>dd]:mt-0 [&>dd]:min-w-0 [&>dd]:break-words">
@@ -176,7 +191,14 @@ export default async function OfficerDetailPage({
               />
             </section>
           )}
-          {showWarnings && <p>Approved warnings: {approvedCount}</p>}
+          {showWarnings &&
+            (warnings?.error ? (
+              <p role="alert" className="text-sm">
+                Approved warning count unavailable. Reload this page to retry.
+              </p>
+            ) : (
+              <p>Approved warnings: {approvedCount}</p>
+            ))}
         </div>
       </div>
       <div
@@ -187,7 +209,24 @@ export default async function OfficerDetailPage({
             aria-label="Warnings"
             className="min-w-0 space-y-3 rounded-lg border border-border p-4"
           >
-            <SectionHeading title="Warnings" />
+            <SectionHeading
+              title="Warnings"
+              action={
+                isAdmin(actor) && !warnings?.error ? (
+                  <CreateWarningForm officerId={officer.id} />
+                ) : undefined
+              }
+            />
+            {warnings?.error && (
+              <p role="alert" className="text-sm">
+                Warning history unavailable. Reload this page to retry.
+              </p>
+            )}
+            {approverNames?.error && (
+              <p role="alert" className="text-sm">
+                Approver names unavailable. Reload this page to retry.
+              </p>
+            )}
             {isAdmin(actor) && approvedCount >= 3 && (
               <p role="status" className="font-semibold">
                 Admin Review — three or more approved warnings. Deactivation is
@@ -200,10 +239,12 @@ export default async function OfficerDetailPage({
                 className="flex flex-wrap gap-4 text-sm"
               >
                 {[
-                  ["All", ""],
+                  ["Active", "active"],
                   ["Pending", "pending"],
                   ["Approved", "approved"],
                   ["Rejected", "rejected"],
+                  ["Voided", "voided"],
+                  ["All history", "all"],
                 ].map(([label, status]) => (
                   <Link
                     key={label}
@@ -215,7 +256,10 @@ export default async function OfficerDetailPage({
                     )}
                     className="underline"
                     aria-current={
-                      (selectedStatus ?? "") === status ? "page" : undefined
+                      (selectedStatus ?? warningHistoryMode ?? "active") ===
+                      status
+                        ? "page"
+                        : undefined
                     }
                   >
                     {label}
@@ -223,59 +267,69 @@ export default async function OfficerDetailPage({
                 ))}
               </nav>
             )}
-            {displayedWarnings.length === 0 && (
+            {!warnings?.error && displayedWarnings.length === 0 && (
               <p>
                 {isAdmin(actor)
                   ? "No warnings in this view."
                   : "No approved warnings."}
               </p>
             )}
-            {displayedWarnings.map((warning) => (
-              <article
-                key={warning.id}
-                className="space-y-2 rounded-lg border border-border p-4"
-              >
-                <div className="flex flex-wrap items-center gap-3">
-                  <StatusBadge status={warning.status} />
-                  <time dateTime={warning.created_at}>
-                    {formatDate(warning.created_at)}
-                  </time>
-                </div>
-                <p className="whitespace-pre-wrap break-words">
-                  {warning.reason}
-                </p>
-                {isAdmin(actor) && (
-                  <>
-                    <p className="text-sm">
-                      Approvals:{" "}
-                      {
-                        warning.warning_approvals.filter(
-                          (approval) => approval.decision === "approved",
-                        ).length
-                      }
-                      /{warning.warning_approvals.length}
-                    </p>
-                    <ul className="text-sm text-muted">
-                      {warning.warning_approvals.map((approval) => (
-                        <li key={approval.approver_id}>
-                          {approval.approver_role} (
-                          {approverNames?.data?.find(
-                            (person) =>
-                              person.id === approval.approver_officer_id,
-                          )?.name ?? approval.approver_id}
-                          ): {approval.decision}
-                        </li>
-                      ))}
-                    </ul>
-                    <DeleteWarningForm
-                      warningId={warning.id}
-                      officerId={officer.id}
-                    />
-                  </>
-                )}
-              </article>
-            ))}
-            {isAdmin(actor) && <CreateWarningForm officerId={officer.id} />}
+            {!warnings?.error &&
+              displayedWarnings.map((warning) => (
+                <article
+                  key={warning.id}
+                  className="space-y-2 rounded-lg border border-border p-4"
+                >
+                  <div className="flex flex-wrap items-center gap-3">
+                    <StatusBadge status={warning.status} />
+                    {warning.voided_at !== null && (
+                      <span className="text-sm font-medium text-muted">
+                        Voided
+                      </span>
+                    )}
+                    <time dateTime={warning.created_at}>
+                      {formatDate(warning.created_at)}
+                    </time>
+                  </div>
+                  <p className="whitespace-pre-wrap break-words">
+                    {warning.reason}
+                  </p>
+                  {isAdmin(actor) && (
+                    <>
+                      <p className="text-sm">
+                        Approvals:{" "}
+                        {
+                          warning.warning_approvals.filter(
+                            (approval) => approval.decision === "approved",
+                          ).length
+                        }
+                        /{warning.warning_approvals.length}
+                      </p>
+                      <ul className="text-sm text-muted">
+                        {warning.warning_approvals.map((approval) => (
+                          <li key={approval.approver_id}>
+                            {approval.approver_role} (
+                            {approverNames?.data?.find(
+                              (person) =>
+                                person.id === approval.approver_officer_id,
+                            )?.name ??
+                              (approverNames?.error
+                                ? "name unavailable"
+                                : approval.approver_id)}
+                            ): {approval.decision}
+                          </li>
+                        ))}
+                      </ul>
+                      {warning.voided_at === null && (
+                        <VoidWarningForm
+                          warningId={warning.id}
+                          officerId={officer.id}
+                        />
+                      )}
+                    </>
+                  )}
+                </article>
+              ))}
           </section>
         )}
         <section
@@ -283,23 +337,32 @@ export default async function OfficerDetailPage({
           className="min-w-0 rounded-lg border border-border p-4"
         >
           <SectionHeading title="Associated events" />
-          {!associatedEvents.length && <p>No associated events yet.</p>}
+          {events.error ? (
+            <p role="alert" className="text-sm">
+              Associated events unavailable. Reload this page to retry.
+            </p>
+          ) : !associatedEvents.length ? (
+            <p>No associated events yet.</p>
+          ) : null}
           <ul>
-            {associatedEvents.map(({ events: event }) => (
-              <li
-                key={event.id}
-                className="flex flex-wrap items-center gap-2 border-b border-border py-2 text-sm"
-              >
-                <Link
-                  href={`/events/${event.id}`}
-                  className="break-words font-medium text-secondary hover:underline"
+            {!events.error &&
+              associatedEvents.map(({ events: event }) => (
+                <li
+                  key={event.id}
+                  className="flex flex-wrap items-center gap-2 border-b border-border py-2 text-sm"
                 >
-                  {event.name}
-                </Link>
-                <span className="text-subtle">{event.event_date}</span>
-                <StatusBadge status={eventStatus(event)} />
-              </li>
-            ))}
+                  <Link
+                    href={`/events/${event.id}`}
+                    className="break-words font-medium text-secondary hover:underline"
+                  >
+                    {event.name}
+                  </Link>
+                  <span className="text-subtle">
+                    {formatCalendarDate(event.event_date)}
+                  </span>
+                  <StatusBadge status={eventStatus(event)} />
+                </li>
+              ))}
           </ul>
         </section>
       </div>
@@ -308,9 +371,15 @@ export default async function OfficerDetailPage({
           title="Point history"
           description="Latest 100 transactions"
         />
-        <TableFrame compact>
-          <PointTransactionTable transactions={transactions.data} />
-        </TableFrame>
+        {transactions.error ? (
+          <p role="alert" className="text-sm">
+            Point history unavailable. Reload this page to retry.
+          </p>
+        ) : (
+          <TableFrame compact label="Officer point history">
+            <PointTransactionTable transactions={transactions.data ?? []} />
+          </TableFrame>
+        )}
         <Link
           href={`/points?officer=${officer.id}`}
           className="mt-3 inline-block text-sm underline"

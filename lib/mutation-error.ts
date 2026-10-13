@@ -10,6 +10,7 @@ const safeMessages = new Set([
   "Schedule would recreate a removed occurrence",
   "Completed or awarded Task point settings cannot be edited",
   "Completed or awarded Tasks cannot be removed",
+  "Completed or awarded Tasks cannot be archived",
   "Only recurring Task occurrences can be removed",
   "Task has been removed",
   "Idempotency key already used",
@@ -17,17 +18,20 @@ const safeMessages = new Set([
   "Unauthorized",
   "Officer not found",
   "Event not found",
+  "Event is not archived",
   "Event outside branch scope",
   "This event cannot be cancelled",
   "Cannot manage another officer signup for this event",
   "Signups are closed for this event",
   "Target officer is not active",
   "All target officers must be active",
+  "This Officer already has an active award for this Event.",
   "Select at least one valid officer",
   "This event cannot accept attendees",
   "Presenter slots are closed for this event",
   "Presenter slot not found",
   "Presenter slot is already taken",
+  "Event is full, so this officer cannot take a presenter slot",
   "Officer already has a presenter slot for this event",
   "Cannot manage another officer presenter slot for this event",
   "Invalid presenter slot difficulty",
@@ -46,6 +50,8 @@ const safeMessages = new Set([
   "Required positions cannot be renamed",
   "Required positions cannot be deleted",
   "This position cannot be deleted because officers are using it",
+  "Invalid or retired position",
+  "Invalid or retired branch",
   "This branch cannot be deleted because dependent records are using it",
   "This event type cannot be deleted because events are using it",
   "Rate must be a finite positive number",
@@ -63,6 +69,8 @@ const safeMessages = new Set([
   "Task outside branch scope",
   "Invalid task fields",
   "Task not found",
+  "Task is not archived",
+  "Archived or cancelled Events cannot be newly linked",
   "Cannot assign another officer",
   "Task is not assigned",
   "Only the assignee can complete this task",
@@ -87,5 +95,7 @@ const safeMessages = new Set([
 ]);
 
 export function mutationError(message: string) {
+  if (message.includes("one_active_primary_event_award_per_officer"))
+    return "This Officer already has an active award for this Event.";
   return safeMessages.has(message) ? message : "Could not save changes";
 }

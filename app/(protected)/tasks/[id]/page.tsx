@@ -16,10 +16,10 @@ import {
   SuccessNotice,
   TableFrame,
 } from "@/components/ui";
-import { formatLabel } from "@/lib/presentation";
+import { formatDateTime, formatLabel } from "@/lib/presentation";
 import { taskStatus } from "@/lib/task-status";
 import Link from "next/link";
-import { TaskRemoveForm } from "../task-remove-form";
+import { TaskRemoveForm, TaskRestoreForm } from "../task-remove-form";
 import TaskSelfAssignForm from "../task-action-form";
 import {
   BulkTaskOfficersForm,
@@ -44,10 +44,9 @@ export default async function TaskDetailPage({
     supabase
       .from("tasks")
       .select(
-        "*,branches(name),task_officer_assignments(officer_id,assigned_at,completed_at,officers!task_officer_assignments_officer_id_fkey(id,name))",
+        "*,branches(name),task_officer_assignments(officer_id,assigned_at,completed_at,officers!task_officer_assignments_officer_id_fkey(id,name)),task_events(events(id,name,event_date,status,deleted_at))",
       )
       .eq("id", taskId)
-      .is("removed_at", null)
       .maybeSingle(),
     supabase
       .from("officers")
@@ -66,18 +65,27 @@ export default async function TaskDetailPage({
 
   const task = result.data;
   const assignments = task.task_officer_assignments;
+  const sortedAssignments = [...assignments].sort(
+    (left, right) =>
+      left.officers.name.localeCompare(right.officers.name, "en", {
+        sensitivity: "base",
+      }) ||
+      left.officers.name.localeCompare(right.officers.name, "en") ||
+      left.officer_id - right.officer_id,
+  );
   const canManageTask = canManageEvent(actor, [task.branch_id]);
+  if (task.removed_at && !canManageTask) notFound();
   const alreadyAssigned = new Set(
     assignments.map(({ officer_id }) => officer_id),
   );
-  const availableOfficers = officerResult.data
-    .filter((officer) => !alreadyAssigned.has(officer.id))
-    .map(({ id, name }) => ({ id, name }));
   const hasProtectedCompletion = assignments.some(
     (assignment) => assignment.completed_at !== null,
   );
-  const canRemoveTask =
+  const canArchiveTask =
     !hasProtectedCompletion && awardsResult.data.length === 0;
+  const availableOfficers = officerResult.data
+    .filter((officer) => !alreadyAssigned.has(officer.id))
+    .map(({ id, name }) => ({ id, name }));
   const series =
     task.recurrence_series_id === null
       ? undefined
@@ -100,7 +108,7 @@ export default async function TaskDetailPage({
       <PageHeader
         title={task.title}
         action={
-          canManageTask ? (
+          canManageTask && !task.removed_at ? (
             <ActionLink
               href={withReturnTo(`/tasks/${taskIdParam}/edit`, returnTo)}
             >
@@ -116,6 +124,7 @@ export default async function TaskDetailPage({
           className="min-w-0 space-y-4 rounded-lg border border-border p-4"
         >
           <SectionHeading title="Task details" />
+          {task.removed_at && <p>Archived {formatDateTime(task.removed_at)}</p>}
           <p className="whitespace-pre-wrap break-words">
             {task.description || "No description"}
           </p>
@@ -137,13 +146,39 @@ export default async function TaskDetailPage({
               <StatusBadge status={currentStatus} />
             </dd>
           </dl>
+          <section aria-label="Linked Events" className="space-y-2">
+            <SectionHeading title="Linked Events" />
+            {task.task_events.length ? (
+              <ul className="list-disc space-y-1 pl-5">
+                {task.task_events.map(({ events: linkedEvent }) => (
+                  <li key={linkedEvent.id}>
+                    <Link href={`/events/${linkedEvent.id}`}>
+                      {linkedEvent.name}
+                    </Link>
+                    <span className="ml-2 text-sm text-muted">
+                      {linkedEvent.deleted_at
+                        ? "Archived"
+                        : linkedEvent.status === "cancelled"
+                          ? "Cancelled"
+                          : linkedEvent.event_date}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p>No linked Events.</p>
+            )}
+          </section>
           {series?.data && (
             <p className="text-sm text-muted">
               Recurring occurrence. Its due date, Officer assignments,
               completion, and points belong to this Task only.
             </p>
           )}
-          {canManageTask && canRemoveTask && (
+          {canManageTask && task.removed_at && (
+            <TaskRestoreForm taskId={task.id} />
+          )}
+          {canManageTask && !task.removed_at && canArchiveTask && (
             <TaskRemoveForm
               taskId={task.id}
               series={series?.data ?? undefined}
@@ -154,6 +189,7 @@ export default async function TaskDetailPage({
 
         <section
           aria-label="Officers"
+          tabIndex={-1}
           className="min-w-0 space-y-4 rounded-lg border border-border p-4"
         >
           <SectionHeading title="Officers" />
@@ -165,21 +201,25 @@ export default async function TaskDetailPage({
                 : "Not completed"
               : "Not assigned"}
           </p>
-          {!myAssignment && <TaskSelfAssignForm taskId={task.id} />}
+          {!task.removed_at && !myAssignment && (
+            <TaskSelfAssignForm taskId={task.id} />
+          )}
           {assignments.length === 0 ? (
             <p>No Officers are assigned to this task.</p>
           ) : (
-            <TableFrame compact>
+            <TableFrame compact label="Task assignment progress">
               <table>
                 <thead>
                   <tr>
                     <th scope="col">Officer</th>
                     <th scope="col">Completion</th>
-                    {canManageTask && <th scope="col">Actions</th>}
+                    {canManageTask && !task.removed_at && (
+                      <th scope="col">Actions</th>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
-                  {assignments.map((assignment) => {
+                  {sortedAssignments.map((assignment) => {
                     const officer = assignment.officers;
                     const completed = assignment.completed_at !== null;
                     const hasAward = awardsResult.data.some(
@@ -194,7 +234,7 @@ export default async function TaskDetailPage({
                           </Link>
                         </td>
                         <td>
-                          {canManageTask ? (
+                          {canManageTask && !task.removed_at ? (
                             <TaskCompletionControl
                               taskId={task.id}
                               officerId={assignment.officer_id}
@@ -207,7 +247,7 @@ export default async function TaskDetailPage({
                             "Not completed"
                           )}
                         </td>
-                        {canManageTask && (
+                        {canManageTask && !task.removed_at && (
                           <td>
                             {canRemoveAssignment ? (
                               <RemoveTaskAssignmentForm
@@ -229,7 +269,7 @@ export default async function TaskDetailPage({
               </table>
             </TableFrame>
           )}
-          {canManageTask && (
+          {canManageTask && !task.removed_at && (
             <div className="space-y-3 border-t border-border pt-4">
               <SectionHeading title="Add officers" />
               <BulkTaskOfficersForm

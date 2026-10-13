@@ -16,6 +16,7 @@ vi.mock("@/lib/authorization", () => ({
 }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
 vi.mock("next/navigation", () => ({
+  useRouter: () => ({ refresh: vi.fn() }),
   notFound: () => {
     throw new Error("Not found");
   },
@@ -37,6 +38,7 @@ import TasksPage from "@/app/(protected)/tasks/page";
 import TaskDetail from "@/app/(protected)/tasks/[id]/page";
 import TaskActionForm from "@/app/(protected)/tasks/task-action-form";
 import { formatEventSchedule } from "@/lib/presentation";
+import { TASK_TYPES } from "@/lib/task-types";
 
 const officer = {
   id: 7,
@@ -55,6 +57,10 @@ const event = {
   event_types: { name: "Meeting" },
   event_branches: [],
   event_officers: [],
+  event_waitlist: [],
+  max_volunteers: null,
+  task_events: [],
+  event_date: "2099-10-08",
   starts_at: "2099-10-08T23:00:00Z",
   ends_at: "2099-10-09T01:00:00Z",
   participation_points_per_hour_at_end: null,
@@ -81,6 +87,7 @@ const task = {
       officers: { id: 2, name: "Other Officer" },
     },
   ],
+  task_events: [],
   recurrence_series_id: 3,
   due_date: "2099-10-08",
 };
@@ -95,6 +102,7 @@ beforeEach(() => {
   vi.mocked(getAuthorizationContext).mockResolvedValue({ id: 1 } as never);
   vi.mocked(canManageEvent).mockReturnValue(true);
   vi.mocked(createClient).mockResolvedValue({
+    rpc: async () => ({ data: [], error: null }),
     from: (table: string) => {
       const query = {
         select: () => query,
@@ -238,6 +246,9 @@ it("allows an authorized manager to edit a standalone Task", async () => {
   );
   expect(html).toContain("Edit task");
   expect(html).toContain('name="title"');
+  for (const taskType of TASK_TYPES) {
+    expect(html).toContain(`<option>${taskType}</option>`);
+  }
   expect(html).not.toContain("This occurrence");
   expect(html).toContain('name="returnTo" value="/tasks?status=open"');
   Object.assign(task, { recurrence_series_id: 3 });
@@ -257,6 +268,26 @@ it("shows per-Officer completion controls to managers and read-only state to Off
   expect(managerHtml).not.toContain("Mark complete");
   expect(managerHtml).not.toContain("Awaiting approval");
   expect(managerHtml).not.toContain(">Approve<");
+  const assignmentRows = managerHtml
+    .split("<table>")[1]
+    .split("</table>")[0]
+    .match(/<tr>[\s\S]*?<\/tr>/g);
+  expect(assignmentRows).toHaveLength(3);
+  expect(assignmentRows?.[1]).toContain("Other Officer");
+  expect(assignmentRows?.[1]).toContain(
+    'aria-label="Completed for Other Officer"',
+  );
+  expect(assignmentRows?.[1]).toContain('name="officer_id" value="2"');
+  expect(assignmentRows?.[1]).toContain("History protected");
+  expect(assignmentRows?.[2]).toContain("Synthetic Officer");
+  expect(assignmentRows?.[2]).toContain(
+    'aria-label="Completed for Synthetic Officer"',
+  );
+  expect(assignmentRows?.[2]).toContain('name="officer_id" value="1"');
+  expect(assignmentRows?.[2]).toContain(
+    'aria-label="Remove Synthetic Officer from task"',
+  );
+  expect(assignmentRows?.[2]).toContain("Remove assignment");
 
   vi.mocked(canManageEvent).mockReturnValue(false);
   const officerHtml = renderToStaticMarkup(await TaskDetail(props));
@@ -330,15 +361,70 @@ it("groups Event details, files and participation while retaining management con
     "Open slides",
     "Open notes",
     "Cancel event",
-    "Remove event",
+    "Archive Event",
   ])
     expect(details).toContain(text);
   expect(details).toContain('rel="noopener noreferrer"');
   const participation = html.split('aria-label="Participation"')[1];
   expect(participation).toContain("Your participation:");
   expect(participation).toContain("Signed-up officers");
-  expect(participation).toContain("Add selected officers");
+  expect(participation).toContain("No officers signed up.");
+  expect(participation).not.toContain("<table");
+  expect(participation).toContain("No active officers are available to add.");
+  expect(participation).not.toContain("Add officer");
   expect(html).toContain("Event point history");
+});
+
+it("keeps manager bulk signup available when eligible Officers exist", async () => {
+  officersForList = [{ id: 4, name: "Available Officer", status: "active" }];
+
+  const html = renderToStaticMarkup(
+    await EventDetail({ params: Promise.resolve({ id: "7" }) }),
+  );
+
+  expect(html).toContain("Add officers (1 available)");
+  expect(html).toContain("Select officers to add");
+  expect(html).toContain('name="officer_ids" value="4"');
+});
+
+it("renders populated Event participation as a compact semantic table", async () => {
+  Object.assign(event, {
+    event_officers: [
+      { officers: { id: 3, name: "Zulu Officer" } },
+      { officers: { id: 2, name: "Alpha Officer" } },
+      { officers: { id: 1, name: "Bravo Officer" } },
+    ],
+  });
+
+  const html = renderToStaticMarkup(
+    await EventDetail({ params: Promise.resolve({ id: "7" }) }),
+  );
+  const participation = html.split('aria-label="Participation"')[1];
+
+  expect(participation).toContain(
+    'class="overflow-x-auto rounded-lg border border-border table-frame--compact table-frame--keyboard-scroll" role="region" aria-label="Event signups" tabindex="0"',
+  );
+  expect(participation).toContain('<table class="min-w-full">');
+  expect(participation).toContain(">Officer</th>");
+  expect(participation).toContain(">Signup</th>");
+  const signupRows = participation
+    .split('<table class="min-w-full">')[1]
+    .split("</table>")[0]
+    .match(/<tr>[\s\S]*?<\/tr>/g);
+  expect(signupRows).toHaveLength(4);
+  expect(signupRows?.[1]).toContain("Alpha Officer");
+  expect(signupRows?.[1]).toContain('name="officer_id" value="2"');
+  expect(signupRows?.[1]).toContain("Remove signup");
+  expect(signupRows?.[2]).toContain("Bravo Officer");
+  expect(signupRows?.[2]).toContain('name="officer_id" value="1"');
+  expect(signupRows?.[2]).toContain("Remove signup");
+  expect(signupRows?.[3]).toContain("Zulu Officer");
+  expect(signupRows?.[3]).toContain('name="officer_id" value="3"');
+  expect(signupRows?.[3]).toContain("Remove signup");
+  expect(participation).toContain("Remove signup");
+  expect(participation).not.toContain("No officers signed up.");
+
+  Object.assign(event, { event_officers: [] });
 });
 
 it("retains Officer operational sections and full point history", async () => {
@@ -357,6 +443,9 @@ it("retains Officer operational sections and full point history", async () => {
   ])
     expect(html).toContain(text);
   expect(html).toContain('aria-label="Warnings"');
+  expect(html).toContain("Create warning");
+  expect(html).toContain('aria-labelledby="create-warning-title"');
+  expect(html).toContain("The reason is permanent");
   expect(html).toContain('aria-label="Associated events"');
   expect(html).toContain('href="/points?officer=7"');
 });
@@ -458,7 +547,7 @@ it("Point History record links carry the same filtered page into Officers, Event
     expect(html).toContain(`href="${withReturnTo(record, returnTo)}"`);
 });
 
-it("keeps Point History values, source and admin context in its compact row", () => {
+it("keeps Point History values, source and admin context in table columns", () => {
   const transactions = [
     {
       id: 33,
@@ -503,11 +592,11 @@ it("keeps Point History values, source and admin context in its compact row", ()
   for (const value of [
     "Emi Huerta",
     "Workshop",
-    "Reason: Workshop correction",
+    "Workshop correction",
     "-2.5",
-    "Type: Correction",
-    "Activity date:",
-    "Actor: Club Administrator",
+    "Correction",
+    "Oct 2, 2026",
+    "Club Administrator",
     "Edit",
     "Remove",
   ])

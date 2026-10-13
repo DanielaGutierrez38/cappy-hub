@@ -3,11 +3,11 @@ import { beforeEach, expect, it, vi } from "vitest";
 vi.mock("@/lib/authorization", () => ({
   getAuthorizationContext: vi.fn(),
   canManageEvent: (
-    actor: { positionName?: string; branchIds?: number[] },
+    actor: { positionCode?: string; branchIds?: number[] },
     branches: number[],
   ) =>
-    actor.positionName === "President" ||
-    (actor.positionName === "Lead" &&
+    actor.positionCode === "president" ||
+    (actor.positionCode === "lead" &&
       branches.length > 0 &&
       branches.some((branchId) => actor.branchIds?.includes(branchId))),
 }));
@@ -22,12 +22,21 @@ import { revalidatePath } from "next/cache";
 import {
   bulkAddEventOfficers,
   restoreEvent,
+  restoreEventArchive,
   saveEvent,
   selfSignup,
 } from "@/app/(protected)/events/actions";
 import { denverTimestamp } from "@/lib/event-time";
 
 const rpc = vi.fn();
+const from = vi.fn(() => {
+  const query = {
+    select: () => query,
+    eq: () => query,
+    maybeSingle: async () => ({ data: null, error: null }),
+  };
+  return query;
+});
 const form = (...ids: string[]) => {
   const data = new FormData();
   data.set("event_id", "12");
@@ -47,6 +56,7 @@ const eventForm = () => {
   data.append("branches", "-4");
   data.set("slides_url", " https://example.com/slides ");
   data.set("meeting_notes_url", "");
+  data.set("signup_sheet_url", " https://example.com/signup ");
   data.set("recurrence_request_key", "00000000-0000-4000-8000-000000000001");
   return data;
 };
@@ -54,7 +64,7 @@ const eventForm = () => {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getAuthorizationContext).mockResolvedValue({ id: 8 } as never);
-  vi.mocked(createClient).mockResolvedValue({ rpc } as never);
+  vi.mocked(createClient).mockResolvedValue({ rpc, from } as never);
   rpc.mockResolvedValue({
     data: {
       added_officer_ids: [3, 4],
@@ -95,10 +105,21 @@ it("rejects malformed Event IDs before calling the restore RPC", async () => {
   expect(rpc).not.toHaveBeenCalled();
 });
 
+it("restores an archived Event through the archive restore RPC", async () => {
+  const data = new FormData();
+  data.set("event_id", "12");
+  expect(await restoreEventArchive({ error: "", success: "" }, data)).toEqual({
+    error: "",
+    success: "Event restored",
+  });
+  expect(rpc).toHaveBeenCalledWith("restore_event_archive", { p_event_id: 12 });
+});
+
 it("rejects malformed Event input before calling the RPC", async () => {
   vi.mocked(getAuthorizationContext).mockResolvedValue({
     id: 8,
     positionName: "President",
+    positionCode: "president",
   } as never);
   const invalidEventForm = eventForm();
   invalidEventForm.set("event_date", "October 12");
@@ -115,12 +136,13 @@ it("sends validated Event fields to the existing RPC", async () => {
   vi.mocked(getAuthorizationContext).mockResolvedValue({
     id: 8,
     positionName: "President",
+    positionCode: "president",
   } as never);
   const data = eventForm();
   data.set("returnTo", "/events?q=meeting&branch=2");
   rpc.mockResolvedValueOnce({ data: 12, error: null });
   await saveEvent({ error: "", success: "" }, data);
-  expect(rpc).toHaveBeenCalledWith("save_event_with_links", {
+  expect(rpc).toHaveBeenCalledWith("save_event_with_capacity", {
     p_event_id: undefined,
     p_name: " CIC meeting ",
     p_description: " Agenda ",
@@ -132,6 +154,8 @@ it("sends validated Event fields to the existing RPC", async () => {
     p_branch_ids: [-4],
     p_slides_url: "https://example.com/slides",
     p_meeting_notes_url: "",
+    p_signup_sheet_url: "https://example.com/signup",
+    p_max_volunteers: 0,
   });
   expect(redirect).toHaveBeenCalledWith(
     "/events/12?returnTo=%2Fevents%3Fq%3Dmeeting%26branch%3D2&feedback=event-saved",
@@ -142,12 +166,13 @@ it("trims a free-entry location before the trusted Event RPC", async () => {
   vi.mocked(getAuthorizationContext).mockResolvedValue({
     id: 8,
     positionName: "President",
+    positionCode: "president",
   } as never);
   const data = eventForm();
   data.set("location", "  CCSB   1.032  ");
   await saveEvent({ error: "", success: "" }, data);
   expect(rpc).toHaveBeenCalledWith(
-    "save_event_with_links",
+    "save_event_with_capacity",
     expect.objectContaining({ p_location: "CCSB   1.032" }),
   );
 });
@@ -156,6 +181,7 @@ it("rejects blank free-entry locations before calling a trusted Event RPC", asyn
   vi.mocked(getAuthorizationContext).mockResolvedValue({
     id: 8,
     positionName: "President",
+    positionCode: "president",
   } as never);
   const data = eventForm();
   data.set("location", "   ");
@@ -172,6 +198,7 @@ it("materializes recurring Events with independent Denver schedules", async () =
   vi.mocked(getAuthorizationContext).mockResolvedValue({
     id: 8,
     positionName: "President",
+    positionCode: "president",
   } as never);
   const recurring = eventForm();
   recurring.set("recurrence_frequency", "daily");
@@ -180,10 +207,12 @@ it("materializes recurring Events with independent Denver schedules", async () =
   recurring.set("recurrence_count", "3");
   await saveEvent({ error: "", success: "" }, recurring);
   expect(rpc).toHaveBeenCalledWith(
-    "create_recurring_event",
+    "create_recurring_event_with_capacity",
     expect.objectContaining({
       p_recurrence_rule: "RRULE:FREQ=DAILY;INTERVAL=1;COUNT=3",
       p_request_key: "00000000-0000-4000-8000-000000000001",
+      p_signup_sheet_url: "https://example.com/signup",
+      p_max_volunteers: 0,
       p_event_dates: ["2026-10-12", "2026-10-13", "2026-10-14"],
       p_starts_at: [
         denverTimestamp("2026-10-12", "10:00"),
@@ -192,6 +221,19 @@ it("materializes recurring Events with independent Denver schedules", async () =
       ],
     }),
   );
+});
+
+it("rejects an invalid signup sheet URL before calling the trusted RPC", async () => {
+  vi.mocked(getAuthorizationContext).mockResolvedValue({
+    id: 8,
+    positionName: "President",
+    positionCode: "president",
+  } as never);
+  const data = eventForm();
+  data.set("signup_sheet_url", "javascript:alert(1)");
+  const result = await saveEvent({ error: "", success: "" }, data);
+  expect(result).toMatchObject({ error: "Enter a valid HTTP or HTTPS URL" });
+  expect(rpc).not.toHaveBeenCalled();
 });
 
 it("rejects malformed IDs before calling Supabase", async () => {
@@ -251,7 +293,7 @@ it("edits a recurring Event through the scoped RPC with only changed fields", as
   data.set("mutation_request_key", "00000000-0000-4000-8000-000000000068");
   data.append("edited_fields", "location");
   await saveEvent({ error: "", success: "" }, data);
-  expect(rpc).toHaveBeenCalledWith("mutate_recurring_event", {
+  expect(rpc).toHaveBeenCalledWith("mutate_recurring_event_with_capacity", {
     p_selected_id: 12,
     p_scope: "following",
     p_operation: "edit",
@@ -285,7 +327,9 @@ it.each([false, true])(
       "/events/12?returnTo=%2Fevents%3Fq%3Dmeeting%26branch%3D2%26status%3Dupcoming&feedback=event-saved",
     );
     expect(rpc).toHaveBeenCalledWith(
-      recurring ? "mutate_recurring_event" : "save_event_with_links",
+      recurring
+        ? "mutate_recurring_event_with_capacity"
+        : "save_event_with_capacity",
       expect.not.objectContaining({ returnTo: expect.anything() }),
     );
   },
@@ -318,7 +362,7 @@ it("a contextual edit still surfaces the Event RPC authorization denial without 
     (await saveEvent({ error: "", success: "" }, data)).error,
   ).toBeTruthy();
   expect(rpc).toHaveBeenCalledWith(
-    "save_event_with_links",
+    "save_event_with_capacity",
     expect.objectContaining({ p_event_id: 12 }),
   );
   expect(redirect).not.toHaveBeenCalled();

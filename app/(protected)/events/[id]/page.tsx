@@ -8,18 +8,19 @@ import PointTransactionTable from "@/components/point-transaction-table";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import {
-  eventStatus,
-  eventSignupOpen,
-  participationLabel,
-} from "@/lib/event-status";
-import { formatDateTime } from "@/lib/presentation";
+import EventResourceLinks from "../event-resource-links";
+import { eventStatus, eventSignupOpen } from "@/lib/event-status";
+import { personalSignupState } from "../personal-signup-state";
+import { formatCalendarDate, formatDateTime } from "@/lib/presentation";
 import {
   BulkAddOfficersForm,
   SignupForm,
+  SelfSignupForm,
   CancelForm,
-  RestoreEventForm,
+  RestoreCancelledEventForm,
+  RestoreArchivedEventForm,
   RemoveEventForm,
+  LeaveWaitlistForm,
 } from "../event-controls";
 import {
   ActionLink,
@@ -47,7 +48,7 @@ export default async function EventDetailPage({
     supabase
       .from("events")
       .select(
-        "*,event_types(name),event_branches(branch_id,branches(name)),event_officers(officers(id,name))",
+        "*,event_types(name),event_branches(branch_id,branches(name)),event_officers(officers(id,name)),event_waitlist(id,joined_at,officer_id,officers(id,name,status)),task_events(tasks(id,title,removed_at))",
       )
       .eq("id", eventId)
       .maybeSingle(),
@@ -57,16 +58,65 @@ export default async function EventDetailPage({
       .eq("status", "active")
       .order("name"),
   ]);
-  if (result.error || officers.error) throw new Error("Failed to load event");
+  const countsResult = await supabase.rpc("event_signup_counts");
+  if (result.error || officers.error || countsResult.error)
+    throw new Error("Failed to load event");
   if (!result.data) notFound();
   const event = result.data;
+  const signupCounts = countsResult.data.find(
+    (row) => row.event_id === event.id,
+  );
+  const confirmedCount = Number(
+    signupCounts?.confirmed_count ?? event.event_officers.length,
+  );
+  const waitlistCount = Number(
+    signupCounts?.waitlist_count ?? event.event_waitlist.length,
+  );
+  const waitlisted = event.event_waitlist.some(
+    ({ officer_id }) => officer_id === actor.id,
+  );
+  const confirmed = event.event_officers.some(
+    ({ officers: officer }) => officer.id === actor.id,
+  );
+  const sortedWaitlist = [...event.event_waitlist].sort(
+    (left, right) =>
+      left.joined_at.localeCompare(right.joined_at) || left.id - right.id,
+  );
+  const sortedEventOfficers = [...event.event_officers].sort(
+    (left, right) =>
+      left.officers.name.localeCompare(right.officers.name, "en", {
+        sensitivity: "base",
+      }) ||
+      left.officers.name.localeCompare(right.officers.name, "en") ||
+      left.officers.id - right.officers.id,
+  );
   const status = eventStatus(event);
-  const signupOpen = eventSignupOpen(event);
+  const signupOpen = !event.deleted_at && eventSignupOpen(event);
   const past = status === "past";
   const canManage = canManageEvent(
     actor,
     event.event_branches.map((eventBranch) => eventBranch.branch_id),
   );
+  const eligibleForSelfSignup = officers.data.some(
+    (officer) => officer.id === actor.id,
+  );
+  const full =
+    event.max_volunteers !== null && confirmedCount >= event.max_volunteers;
+  const personalSignup = personalSignupState({
+    open: signupOpen,
+    confirmed,
+    waitlisted,
+    eligible: eligibleForSelfSignup,
+    full,
+  });
+  const officersAvailableToAdd = officers.data.filter(
+    (officer) =>
+      !event.event_officers.some(
+        (eventSignup) => eventSignup.officers.id === officer.id,
+      ) &&
+      !event.event_waitlist.some((entry) => entry.officer_id === officer.id),
+  );
+  if (event.deleted_at && !canManage) notFound();
   const transactions = await supabase
     .from("point_transactions")
     .select(
@@ -120,14 +170,14 @@ export default async function EventDetailPage({
             <dt>Location</dt>
             <dd className="break-words">{event.location || "Not set"}</dd>
             <dt>Date</dt>
-            <dd>{event.event_date}</dd>
+            <dd>{formatCalendarDate(event.event_date)}</dd>
             <dt>Start</dt>
             <dd>{formatDateTime(event.starts_at)}</dd>
             <dt>End</dt>
             <dd>{formatDateTime(event.ends_at)}</dd>
             {event.deleted_at && (
               <>
-                <dt>Removed at</dt>
+                <dt>Archived at</dt>
                 <dd>{formatDateTime(event.deleted_at)}</dd>
               </>
             )}
@@ -137,9 +187,11 @@ export default async function EventDetailPage({
                 ? "Not processed"
                 : `${event.participation_points_per_hour_at_end} points/hour`}
             </dd>
+            <dt>Max volunteers</dt>
+            <dd>{event.max_volunteers ?? "Unlimited"}</dd>
             <dt>Status</dt>
             <dd>
-              <StatusBadge status={status} />
+              <StatusBadge status={event.deleted_at ? "Archived" : status} />
             </dd>
             <dt>Branches</dt>
             <dd>
@@ -150,39 +202,18 @@ export default async function EventDetailPage({
               />
             </dd>
           </dl>
-          {(event.slides_url || event.meeting_notes_url) && (
-            <section>
-              <h3 className="mb-2 text-sm font-semibold text-foreground">
-                Links and files
-              </h3>
-              <div className="flex flex-wrap gap-x-4 gap-y-2 text-sm">
-                {event.slides_url && (
-                  <a
-                    href={event.slides_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex min-h-9 items-center underline underline-offset-4"
-                  >
-                    Open slides
-                  </a>
-                )}
-                {event.meeting_notes_url && (
-                  <a
-                    href={event.meeting_notes_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex min-h-9 items-center underline underline-offset-4"
-                  >
-                    Open notes
-                  </a>
-                )}
-              </div>
-            </section>
+          <EventResourceLinks
+            slidesUrl={event.slides_url}
+            meetingNotesUrl={event.meeting_notes_url}
+            signupSheetUrl={event.signup_sheet_url}
+          />
+          {canManage && event.deleted_at && (
+            <RestoreArchivedEventForm eventId={event.id} />
           )}
           {canManage && !event.deleted_at && (
             <div className="flex flex-wrap gap-3 [&>form]:w-auto">
               {status === "cancelled" && (
-                <RestoreEventForm eventId={event.id} />
+                <RestoreCancelledEventForm eventId={event.id} />
               )}
               {signupOpen && (
                 <CancelForm
@@ -205,100 +236,155 @@ export default async function EventDetailPage({
         >
           <p>
             Your participation:{" "}
-            {participationLabel(
-              event.event_officers.some(
-                ({ officers: officer }) => officer.id === actor.id,
-              ),
-            )}
+            {confirmed
+              ? "Confirmed"
+              : waitlisted
+                ? "Waitlisted"
+                : "Not signed up"}
+          </p>
+          <p className="text-sm text-muted">
+            {event.max_volunteers === null
+              ? `${confirmedCount} confirmed`
+              : `${confirmedCount} / ${event.max_volunteers} confirmed`}
+            {waitlistCount > 0 ? ` · ${waitlistCount} waitlisted` : ""}
           </p>
           <section className="space-y-3">
             <SectionHeading title="Signed-up officers" />
-            <TableFrame>
-              <table className="min-w-full">
-                <thead>
-                  <tr>
-                    <th>Officer</th>
-                    <th>Signup</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {event.event_officers.map(({ officers: officer }) => (
-                    <tr key={officer.id}>
-                      <td>
-                        <Link href={`/officers/${officer.id}`}>
-                          {officer.name}
-                        </Link>
-                      </td>
-                      <td>
-                        {signupOpen &&
-                        (canManage || officer.id === actor.id) ? (
-                          <SignupForm
-                            eventId={event.id}
-                            officerId={officer.id}
-                            remove
-                          />
-                        ) : (
-                          "Closed"
-                        )}
-                      </td>
+            {event.event_officers.length ? (
+              <TableFrame compact label="Event signups">
+                <table className="min-w-full">
+                  <thead>
+                    <tr>
+                      <th>Officer</th>
+                      <th>Signup</th>
                     </tr>
+                  </thead>
+                  <tbody>
+                    {sortedEventOfficers.map(({ officers: officer }) => (
+                      <tr key={officer.id}>
+                        <td>
+                          <Link href={`/officers/${officer.id}`}>
+                            {officer.name}
+                          </Link>
+                        </td>
+                        <td>
+                          {signupOpen &&
+                          (canManage || officer.id === actor.id) ? (
+                            <SignupForm
+                              eventId={event.id}
+                              officerId={officer.id}
+                              remove
+                            />
+                          ) : (
+                            "Closed"
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </TableFrame>
+            ) : (
+              <p>No officers signed up.</p>
+            )}
+            {personalSignup === "waitlisted" && (
+              <LeaveWaitlistForm eventId={event.id} />
+            )}
+            {signupOpen &&
+              canManage &&
+              (officersAvailableToAdd.length > 0 ? (
+                <details className="event-roster-disclosure">
+                  <summary>
+                    Add officers ({officersAvailableToAdd.length} available)
+                  </summary>
+                  <BulkAddOfficersForm
+                    eventId={event.id}
+                    officers={officersAvailableToAdd}
+                  />
+                </details>
+              ) : (
+                <p className="text-sm text-muted">
+                  No active officers are available to add.
+                </p>
+              ))}
+            {!canManage &&
+              (personalSignup === "available" || personalSignup === "full") && (
+                <SelfSignupForm
+                  eventId={event.id}
+                  eventName={event.name}
+                  full={personalSignup === "full"}
+                />
+              )}
+            {canManage &&
+              past &&
+              !event.deleted_at &&
+              (officersAvailableToAdd.length > 0 ? (
+                <details className="event-roster-disclosure">
+                  <summary>Add attendees and award points</summary>
+                  <BulkAddOfficersForm
+                    eventId={event.id}
+                    past
+                    pointsPerOfficer={
+                      event.participation_points_per_hour_at_end === null
+                        ? undefined
+                        : ((new Date(event.ends_at).getTime() -
+                            new Date(event.starts_at).getTime()) /
+                            3_600_000) *
+                          event.participation_points_per_hour_at_end
+                    }
+                    officers={officersAvailableToAdd}
+                  />
+                </details>
+              ) : (
+                <p className="text-sm text-muted">
+                  No active officers are available to add.
+                </p>
+              ))}
+            {canManage && waitlistCount > 0 && (
+              <section aria-label="Waitlist" className="space-y-2">
+                <SectionHeading title={`Waitlist (${waitlistCount})`} />
+                <ol className="list-decimal space-y-1 pl-5">
+                  {sortedWaitlist.map((entry) => (
+                    <li key={entry.id}>
+                      <Link href={`/officers/${entry.officers.id}`}>
+                        {entry.officers.name}
+                      </Link>
+                      {entry.officers.status !== "active" && (
+                        <span className="ml-2 text-sm text-muted">
+                          Inactive; skipped for promotion
+                        </span>
+                      )}
+                    </li>
                   ))}
-                </tbody>
-              </table>
-            </TableFrame>
-            {!event.event_officers.length && <p>No officers signed up.</p>}
-            {signupOpen && canManage && (
-              <BulkAddOfficersForm
-                eventId={event.id}
-                officers={officers.data.filter(
-                  (officer) =>
-                    !event.event_officers.some(
-                      (eventSignup) => eventSignup.officers.id === officer.id,
-                    ),
-                )}
-              />
-            )}
-            {signupOpen && !canManage && (
-              <SignupForm
-                eventId={event.id}
-                officers={officers.data.filter(
-                  (officer) =>
-                    officer.id === actor.id &&
-                    !event.event_officers.some(
-                      (eventSignup) => eventSignup.officers.id === officer.id,
-                    ),
-                )}
-              />
-            )}
-            {canManage && past && !event.deleted_at && (
-              <BulkAddOfficersForm
-                eventId={event.id}
-                past
-                pointsPerOfficer={
-                  event.participation_points_per_hour_at_end === null
-                    ? undefined
-                    : ((new Date(event.ends_at).getTime() -
-                        new Date(event.starts_at).getTime()) /
-                        3_600_000) *
-                      event.participation_points_per_hour_at_end
-                }
-                officers={officers.data.filter(
-                  (officer) =>
-                    !event.event_officers.some(
-                      (eventSignup) => eventSignup.officers.id === officer.id,
-                    ),
-                )}
-              />
+                </ol>
+              </section>
             )}
           </section>
         </section>
       </div>
       <section>
+        <SectionHeading title="Linked Tasks" />
+        {event.task_events.length ? (
+          <ul className="list-disc space-y-1 pl-5">
+            {event.task_events.map(({ tasks: linkedTask }) => (
+              <li key={linkedTask.id}>
+                <Link href={`/tasks/${linkedTask.id}`}>{linkedTask.title}</Link>
+                {linkedTask.removed_at && (
+                  <span className="ml-2 text-sm text-muted">Archived</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p>No linked Tasks.</p>
+        )}
+      </section>
+      <section>
         <SectionHeading
           title="Event point history"
           description="Latest 100 transactions"
         />
-        <TableFrame compact>
+        <TableFrame compact label="Event point history">
           <PointTransactionTable transactions={transactions.data} />
         </TableFrame>
         <Link

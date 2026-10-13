@@ -29,6 +29,9 @@ export type ActionItem = {
   status: string;
   dueDate?: string;
 };
+export type DashboardActionItems = ReturnType<typeof dashboardActionItems> & {
+  unavailableSources: { tasks: boolean; warnings: boolean };
+};
 
 export function dashboardActionItems(
   actor: AuthorizationContext,
@@ -44,45 +47,46 @@ export function dashboardActionItems(
     status: "Not completed",
     dueDate: task.due_date,
   });
-  const items: ActionItem[] = [
-    ...personalTasks
-      .filter((task) =>
-        task.task_officer_assignments.some(
-          (assignment) =>
-            assignment.officer_id === actor.id &&
-            assignment.completed_at === null,
-        ),
-      )
-      .sort(byDueDate)
-      .map(taskItem),
-    ...warnings
-      .filter((warning) =>
-        warning.warning_approvals.some(
-          (approval) =>
-            approval.approver_officer_id === actor.id &&
-            approval.decision === "pending",
-        ),
-      )
-      .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id)
-      .map((warning): ActionItem => ({
-        key: `warning-${warning.id}`,
-        title: warning.officers
-          ? `Warning for ${warning.officers.name}`
-          : "Warning decision",
-        href: `/officers#warning-${warning.id}`,
-        status: "Needs decision",
-      })),
-  ];
+  const pendingWarnings = warnings
+    .filter((warning) =>
+      warning.warning_approvals.some(
+        (approval) =>
+          approval.approver_officer_id === actor.id &&
+          approval.decision === "pending",
+      ),
+    )
+    .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id)
+    .map((warning): ActionItem => ({
+      key: `warning-${warning.id}`,
+      title: warning.officers
+        ? `Warning for ${warning.officers.name}`
+        : "Warning decision",
+      href: `/officers#warning-${warning.id}`,
+      status: "Needs decision",
+    }));
+  const pendingTasks = personalTasks
+    .filter((task) =>
+      task.task_officer_assignments.some(
+        (assignment) =>
+          assignment.officer_id === actor.id &&
+          assignment.completed_at === null,
+      ),
+    )
+    .sort(byDueDate)
+    .map(taskItem);
+  // Leadership decisions need attention before ordinary future Tasks.
+  const items = [...pendingWarnings, ...pendingTasks];
   return {
     items: items.slice(0, ACTION_ITEM_LIMIT),
     hasMore: items.length > ACTION_ITEM_LIMIT,
+    hasPendingWarnings: pendingWarnings.length > 0,
   };
 }
 
 export async function loadDashboardActionItems(
   supabase: Awaited<ReturnType<typeof createClient>>,
   actor: AuthorizationContext,
-) {
+): Promise<DashboardActionItems> {
   const taskQuery = () =>
     supabase
       .from("tasks")
@@ -109,7 +113,17 @@ export async function loadDashboardActionItems(
       .order("id")
       .limit(queryLimit),
   ]);
-  if (assigned.error || warnings.error)
-    throw new Error("Failed to load dashboard action items");
-  return dashboardActionItems(actor, assigned.data, warnings.data);
+  const tasksUnavailable = assigned.error !== null || assigned.data === null;
+  const warningsUnavailable = warnings.error !== null || warnings.data === null;
+  return {
+    ...dashboardActionItems(
+      actor,
+      tasksUnavailable ? [] : assigned.data,
+      warningsUnavailable ? [] : warnings.data,
+    ),
+    unavailableSources: {
+      tasks: tasksUnavailable,
+      warnings: warningsUnavailable,
+    },
+  };
 }
