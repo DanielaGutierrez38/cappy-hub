@@ -74,6 +74,12 @@ const knownActions: Record<string, string> = {
   "position.created": "Created a position",
   "position.deleted": "Deleted a position",
   "position.renamed": "Renamed a position",
+  "presentation.assigned": "Assigned a presenter",
+  "presentation.claimed": "Volunteered to present",
+  "presentation.details_updated": "Updated presenter slot details",
+  "presentation.released": "Stepped down as presenter",
+  "presentation.slots_updated": "Changed presenter slots",
+  "presentation.unassigned": "Removed a presenter",
   "task.approved": "Approved a completed task",
   "task.assigned": "Assigned an officer to a task",
   "task.completed": "Marked a task complete",
@@ -110,6 +116,9 @@ const fieldLabels: Record<string, string> = {
   old_rate: "Participation rate",
   points: "Points",
   position_id: "Position",
+  prep_notes: "Prep notes",
+  problem_title: "Problem",
+  problem_url: "Problem link",
   rate: "Participation rate",
   reason: "Reason",
   slides_url: "Slides link",
@@ -133,6 +142,7 @@ const hiddenChangeFields = new Set([
   "task_id",
   "auth_user_id",
   "request_key",
+  "slot_id",
   "revision",
 ]);
 
@@ -281,6 +291,19 @@ function summarizeChanges(details: AuditObject | undefined) {
   return [];
 }
 
+function difficultyLabel(detail: AuditObject | undefined) {
+  const difficulty = readString(detail, ["difficulty"]);
+  return difficulty ? formatLabel(difficulty).toLowerCase() : "a";
+}
+
+function presenterSlotSummary(detail: AuditObject | undefined) {
+  const difficulty = readString(detail, ["difficulty"]);
+  const slot = difficulty ? `${formatLabel(difficulty)} problem` : "Problem";
+  return readString(detail, ["reason"]) === "signup_removed"
+    ? `${slot} · Event signup removed`
+    : slot;
+}
+
 function sentenceFor(
   entry: AuditEntryForPresentation,
   detail: AuditObject | undefined,
@@ -309,6 +332,14 @@ function sentenceFor(
         return `Added ${names.slice(0, 3).join(", ")}${names.length > 3 ? ` and ${names.length - 3} others` : ""} to ${recordName}`;
       return `${knownActions[entry.action]} (${ids.length} ${ids.length === 1 ? "officer" : "officers"})`;
     }
+    case "presentation.claimed":
+      return `${personName} volunteered to present the ${difficultyLabel(detail)} problem at ${recordName}`;
+    case "presentation.released":
+      return `${personName} stepped down from the ${difficultyLabel(detail)} problem at ${recordName}`;
+    case "presentation.assigned":
+      return `Assigned ${personName} to present the ${difficultyLabel(detail)} problem at ${recordName}`;
+    case "presentation.unassigned":
+      return `Removed ${personName} from the ${difficultyLabel(detail)} problem at ${recordName}`;
     case "task.assigned":
       return `Assigned ${personName} to ${recordName}`;
     case "task.officer_added":
@@ -508,6 +539,21 @@ export function presentAuditEntry(
     detailSummary = `Assigned to ${officerName ?? "Officer"}`;
   else if (entry.action === "event.officer_removed")
     detailSummary = `Removed ${officerName ?? "Officer"}`;
+  else if (
+    entry.action === "presentation.claimed" ||
+    entry.action === "presentation.released" ||
+    entry.action === "presentation.assigned" ||
+    entry.action === "presentation.unassigned"
+  )
+    detailSummary = presenterSlotSummary(details);
+  else if (
+    entry.action === "presentation.slots_updated" &&
+    Array.isArray(details?.difficulties)
+  )
+    detailSummary =
+      details.difficulties.length > 0
+        ? `Slots: ${details.difficulties.map((difficulty) => formatLabel(String(difficulty))).join(", ")}`
+        : "No presenter slots";
   else if (entry.action === "task.assigned")
     detailSummary = `Assigned to ${officerName ?? "Officer"}`;
   else if (entry.action === "task.officer_added")

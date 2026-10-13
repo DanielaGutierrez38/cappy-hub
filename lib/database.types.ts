@@ -637,6 +637,68 @@ export type Database = {
         };
         Relationships: [];
       };
+      presentation_slots: {
+        Row: {
+          created_at: string;
+          difficulty: string;
+          event_id: number;
+          id: number;
+          officer_id: number | null;
+          prep_notes: string | null;
+          problem_title: string | null;
+          problem_url: string | null;
+        };
+        Insert: {
+          created_at?: string;
+          difficulty: string;
+          event_id: number;
+          id?: number;
+          officer_id?: number | null;
+          prep_notes?: string | null;
+          problem_title?: string | null;
+          problem_url?: string | null;
+        };
+        Update: {
+          created_at?: string;
+          difficulty?: string;
+          event_id?: number;
+          id?: number;
+          officer_id?: number | null;
+          prep_notes?: string | null;
+          problem_title?: string | null;
+          problem_url?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "presentation_slots_event_id_fkey";
+            columns: ["event_id"];
+            isOneToOne: false;
+            referencedRelation: "events";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "presentation_slots_officer_id_fkey";
+            columns: ["officer_id"];
+            isOneToOne: false;
+            referencedRelation: "officer_point_totals";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "presentation_slots_officer_id_fkey";
+            columns: ["officer_id"];
+            isOneToOne: false;
+            referencedRelation: "officers";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "presentation_slots_presenter_signup_fkey";
+            columns: ["event_id", "officer_id"];
+            isOneToOne: false;
+            referencedRelation: "event_officers";
+            referencedColumns: ["event_id", "officer_id"];
+          },
+        ];
+      };
       task_assignments: {
         Row: {
           approved_at: string | null;
@@ -1150,6 +1212,15 @@ export type Database = {
         Args: { p_event_id: number; p_officer_id: number; p_remove?: boolean };
         Returns: undefined;
       };
+      change_presenter_slot: {
+        Args: {
+          p_difficulty: string;
+          p_event_id: number;
+          p_officer_id: number;
+          p_release?: boolean;
+        };
+        Returns: undefined;
+      };
       claim_current_officer_identity: {
         Args: Record<PropertyKey, never>;
         Returns: number;
@@ -1322,12 +1393,25 @@ export type Database = {
         Returns: undefined;
       };
       set_participation_rate: { Args: { p_rate: number }; Returns: undefined };
+      set_presenter_slots: {
+        Args: { p_difficulties: string[]; p_event_id: number };
+        Returns: undefined;
+      };
       set_task_assignment_completion: {
         Args: { p_completed: boolean; p_officer_id: number; p_task_id: number };
         Returns: undefined;
       };
       update_point_transaction: {
         Args: { p_points: number; p_transaction_id: number };
+        Returns: undefined;
+      };
+      update_presenter_slot_details: {
+        Args: {
+          p_prep_notes: string;
+          p_problem_title: string;
+          p_problem_url: string;
+          p_slot_id: number;
+        };
         Returns: undefined;
       };
       update_task_details: {
