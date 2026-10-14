@@ -3,8 +3,8 @@
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { renderToStaticMarkup } from "react-dom/server";
-import { addTransaction } from "@/app/(protected)/points/actions";
+import { addTransaction, searchEvents } from "@/app/(protected)/points/actions";
+import { EventSearchSelect } from "@/app/(protected)/points/event-search-select";
 
 vi.mock("@/app/(protected)/points/actions", () => ({
   addTransaction: vi.fn(),
@@ -15,9 +15,7 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh }),
 }));
 
-import TransactionForm, {
-  mergeEventSearchResults,
-} from "@/app/(protected)/points/transaction-form";
+import TransactionForm from "@/app/(protected)/points/transaction-form";
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
@@ -57,6 +55,7 @@ afterEach(async () => {
   await act(async () => root.unmount());
   host.remove();
   delete globalThis.IS_REACT_ACT_ENVIRONMENT;
+  vi.useRealTimers();
 });
 
 async function renderTransactionForm() {
@@ -137,30 +136,309 @@ async function submit(dialog: HTMLDialogElement) {
   });
 }
 
-it("disambiguates duplicate Event names by occurrence date and preserves IDs", () => {
-  const html = renderToStaticMarkup(
-    <TransactionForm officers={[]} events={repeatedEvents} />,
+async function renderEventSelector() {
+  await act(async () => {
+    root.render(
+      createElement(
+        "form",
+        null,
+        createElement(EventSearchSelect, { events: [] }),
+      ),
+    );
+  });
+  return host.querySelector<HTMLFormElement>("form")!;
+}
+
+function setEventQuery(input: HTMLInputElement, query: string) {
+  act(() => {
+    input.focus();
+    Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )?.set?.call(input, query);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+async function finishEventSearch() {
+  await act(async () => vi.advanceTimersByTimeAsync(300));
+}
+
+async function selectEventOption(input: HTMLInputElement, label: string) {
+  await act(async () => {
+    input.focus();
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+    );
+  });
+  const option = [
+    ...document.querySelectorAll<HTMLElement>('[role="option"]'),
+  ].find((candidate) => candidate.textContent?.includes(label));
+  if (!option) throw new Error(`Event option not found: ${label}`);
+  await act(async () => {
+    option.dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true, button: 0 }),
+    );
+    option.dispatchEvent(
+      new MouseEvent("mouseup", { bubbles: true, button: 0 }),
+    );
+    option.click();
+  });
+}
+
+it("retains a selected remote Event label and FormData ID across clearing and another search", async () => {
+  vi.useFakeTimers();
+  const selectedEvent = {
+    id: 51,
+    name: "Remote review session",
+    event_date: "2026-10-20",
+  };
+  const anotherEvent = {
+    id: 52,
+    name: "Another event",
+    event_date: "2026-10-21",
+  };
+  vi.mocked(searchEvents)
+    .mockResolvedValueOnce({ events: [selectedEvent], error: false })
+    .mockResolvedValueOnce({ events: [anotherEvent], error: false });
+
+  const form = await renderEventSelector();
+  const input = form.querySelector<HTMLInputElement>(
+    'input[placeholder="Search Events"]',
+  )!;
+  setEventQuery(input, "Remote");
+  await finishEventSearch();
+  expect(searchEvents).toHaveBeenCalledWith("Remote");
+
+  await selectEventOption(input, "Remote review session");
+  expect(
+    form.querySelector<HTMLInputElement>('input[name="event_id"]')?.value,
+  ).toBe("51");
+  expect(document.body.textContent).toContain(
+    "Selected: Remote review session — Oct 20, 2026",
   );
 
-  expect(html).toContain(
-    '<option value="11">Repeated event — Oct 8, 2026</option>',
+  setEventQuery(input, "Cleared query");
+  setEventQuery(input, "");
+  await act(async () => vi.advanceTimersByTimeAsync(350));
+  expect(searchEvents).toHaveBeenCalledTimes(1);
+  expect(
+    form.querySelector<HTMLInputElement>('input[name="event_id"]')?.value,
+  ).toBe("51");
+  expect(document.body.textContent).toContain(
+    "Selected: Remote review session — Oct 20, 2026",
   );
-  expect(html).toContain(
-    '<option value="12">Repeated event — Oct 15, 2026</option>',
+
+  setEventQuery(input, "Another");
+  await finishEventSearch();
+  expect(searchEvents).toHaveBeenCalledTimes(2);
+  await act(async () => {
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+    );
+  });
+  expect(document.body.textContent).toContain("Another event — Oct 21, 2026");
+  expect(document.body.textContent).toContain(
+    "Selected: Remote review session — Oct 20, 2026",
+  );
+  expect(
+    form.querySelector<HTMLInputElement>('input[name="event_id"]')?.value,
+  ).toBe("51");
+
+  setEventQuery(input, "");
+  await act(async () => {
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+    );
+  });
+  const noEvent = [
+    ...document.querySelectorAll<HTMLElement>('[role="option"]'),
+  ].find((option) => option.textContent?.includes("No event"));
+  expect(noEvent).toBeDefined();
+  await act(async () => noEvent!.click());
+  expect(
+    form.querySelector<HTMLInputElement>('input[name="event_id"]')?.value,
+  ).toBe("");
+  expect(document.body.textContent).not.toContain(
+    "Selected: Remote review session",
   );
 });
 
-it("retains a previously selected Event when another search returns new matches", () => {
-  const selected = repeatedEvents[0];
+it("renders recent Events with dates and an explicit No event option", async () => {
+  await renderTransactionForm();
+  const { dialog } = openDialog();
+  const input = dialog.querySelector<HTMLInputElement>(
+    'input[placeholder="Search Events"]',
+  );
+  expect(input).not.toBeNull();
+  act(() => {
+    input!.focus();
+    input!.click();
+    input!.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+    );
+  });
+  expect(document.body.textContent).toContain("No event");
+  expect(document.body.textContent).toContain("Repeated event — Oct 8, 2026");
+  expect(document.body.textContent).toContain("Repeated event — Oct 15, 2026");
+});
+
+it("debounces remote lookup and enforces two non-whitespace characters", async () => {
+  vi.useFakeTimers();
+  vi.mocked(searchEvents).mockResolvedValue({ events: [], error: false });
+  await renderTransactionForm();
+  const { dialog } = openDialog();
+  const input = dialog.querySelector<HTMLInputElement>(
+    'input[placeholder="Search Events"]',
+  )!;
+  const setQuery = (value: string) => {
+    act(() => {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )?.set?.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  };
+
+  setQuery("A ");
+  await act(async () => vi.advanceTimersByTimeAsync(350));
+  expect(searchEvents).not.toHaveBeenCalled();
+
+  setQuery("Older");
+  await act(async () => vi.advanceTimersByTimeAsync(299));
+  expect(searchEvents).not.toHaveBeenCalled();
+  await act(async () => vi.advanceTimersByTimeAsync(1));
+  expect(searchEvents).toHaveBeenCalledExactlyOnceWith("Older");
+});
+
+it("reports request errors separately and preserves selected Event IDs while searching", async () => {
+  vi.mocked(searchEvents).mockResolvedValue({ events: [], error: true });
+  await act(async () => {
+    root.render(
+      createElement(EventSearchSelect, { events: [], initialValue: "23" }),
+    );
+  });
+  const input = host.querySelector<HTMLInputElement>(
+    'input[placeholder="Search Events"]',
+  )!;
+  act(() => {
+    Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )?.set?.call(input, "Lookup");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 350)));
+
   expect(
-    mergeEventSearchResults(
-      [selected],
-      [{ id: 14, name: "Older event", event_date: "2025-02-10" }],
+    host.querySelector<HTMLInputElement>('input[name="event_id"]')?.value,
+  ).toBe("23");
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain(
+    "Could not search Events",
+  );
+  act(() => {
+    input.focus();
+    input.click();
+    Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )?.set?.call(input, "No event");
+    input.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        data: "No event",
+        inputType: "insertText",
+      }),
+    );
+  });
+  const noEventOption = [
+    ...document.querySelectorAll<HTMLElement>('[role="option"]'),
+  ].find((option) => option.textContent?.includes("No event"));
+  expect(noEventOption).toBeDefined();
+  act(() => {
+    noEventOption?.dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true, button: 0 }),
+    );
+    noEventOption?.dispatchEvent(
+      new MouseEvent("mouseup", { bubbles: true, button: 0 }),
+    );
+    noEventOption?.click();
+  });
+  expect(
+    host.querySelector<HTMLInputElement>('input[name="event_id"]')?.value,
+  ).toBe("");
+});
+
+it("keeps newer results when an older request resolves last", async () => {
+  vi.useFakeTimers();
+  let resolveOlder!: (result: {
+    events: { id: number; name: string; event_date: string }[];
+    error: false;
+  }) => void;
+  let resolveNewer!: (result: {
+    events: { id: number; name: string; event_date: string }[];
+    error: false;
+  }) => void;
+  vi.mocked(searchEvents)
+    .mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveOlder = resolve;
+        }),
+    )
+    .mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveNewer = resolve;
+        }),
+    );
+  await act(async () => {
+    root.render(createElement(EventSearchSelect, { events: [] }));
+  });
+  const input = host.querySelector<HTMLInputElement>(
+    'input[placeholder="Search Events"]',
+  )!;
+  const setQuery = (value: string) =>
+    act(() => {
+      input.focus();
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )?.set?.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+
+  setQuery("Older");
+  await act(async () => vi.advanceTimersByTimeAsync(300));
+  setQuery("Newer");
+  await act(async () => vi.advanceTimersByTimeAsync(300));
+  await act(async () => {
+    resolveNewer({
+      events: [{ id: 2, name: "Newer Event", event_date: "2026-10-16" }],
+      error: false,
+    });
+  });
+  await selectEventOption(input, "Newer Event");
+  await act(async () => {
+    resolveOlder({
+      events: [{ id: 1, name: "Older Event", event_date: "2026-10-15" }],
+      error: false,
+    });
+  });
+
+  act(() =>
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
     ),
-  ).toEqual([
-    selected,
-    { id: 14, name: "Older event", event_date: "2025-02-10" },
-  ]);
+  );
+  expect(document.body.textContent).toContain(
+    "Selected: Newer Event — Oct 16, 2026",
+  );
+  expect(
+    host.querySelector<HTMLInputElement>('input[name="event_id"]')?.value,
+  ).toBe("2");
+  expect(document.body.textContent).not.toContain("Older Event — Oct 15, 2026");
 });
 
 it("keeps the dialog and submitted values after persistence failure, blocks pending dismissal, then resets and refreshes on success", async () => {
@@ -181,6 +459,37 @@ it("keeps the dialog and submitted values after persistence failure, blocks pend
   await renderTransactionForm();
   const { dialog, trigger } = openDialog();
   fillTransaction(dialog);
+  const eventInput = dialog.querySelector<HTMLInputElement>(
+    'input[placeholder="Search Events"]',
+  )!;
+  act(() => {
+    eventInput.focus();
+    eventInput.click();
+    Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )?.set?.call(eventInput, "Repeated");
+    eventInput.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        data: "Repeated",
+        inputType: "insertText",
+      }),
+    );
+  });
+  act(() =>
+    eventInput.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+    ),
+  );
+  act(() =>
+    eventInput.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    ),
+  );
+  expect(
+    dialog.querySelector<HTMLInputElement>('input[name="event_id"]')?.value,
+  ).toBe("12");
   await submit(dialog);
 
   const form = dialog.querySelector<HTMLFormElement>("form")!;
@@ -197,6 +506,7 @@ it("keeps the dialog and submitted values after persistence failure, blocks pend
     Object.fromEntries(vi.mocked(addTransaction).mock.calls[0][1] as FormData),
   ).toMatchObject({
     officer_id: "3",
+    event_id: "12",
     points: "2.5",
     reason: "Lifecycle check",
   });
@@ -215,7 +525,7 @@ it("keeps the dialog and submitted values after persistence failure, blocks pend
         points: "2.5",
         reason: "Lifecycle check",
         award_type: "manual",
-        event_id: "",
+        event_id: "12",
       },
     });
   });
@@ -229,6 +539,9 @@ it("keeps the dialog and submitted values after persistence failure, blocks pend
   expect(
     dialog.querySelector<HTMLInputElement>('input[name="reason"]')?.value,
   ).toBe("Lifecycle check");
+  expect(
+    dialog.querySelector<HTMLInputElement>('input[name="event_id"]')?.value,
+  ).toBe("12");
   expect(dialog.textContent).toContain("Could not save changes");
 
   const officerSearch = dialog.querySelector<HTMLInputElement>(
@@ -259,6 +572,9 @@ it("keeps the dialog and submitted values after persistence failure, blocks pend
       "officer_id",
     ),
   ).toEqual(["3"]);
+  expect(
+    (vi.mocked(addTransaction).mock.calls[1][1] as FormData).getAll("event_id"),
+  ).toEqual(["12"]);
   expect(dialog.open).toBe(false);
   expect(trigger.ownerDocument.activeElement).toBe(trigger);
   expect(refresh).toHaveBeenCalledOnce();
