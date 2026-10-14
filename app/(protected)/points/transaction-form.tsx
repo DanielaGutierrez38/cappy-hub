@@ -10,20 +10,22 @@ import {
 import { useRouter } from "next/navigation";
 import type { Tables } from "@/lib/database.types";
 import { initialFormActionState, submittedValue } from "@/lib/form-feedback";
-import { formatEventFilterOption } from "@/lib/presentation";
-import { ActionFeedback, FieldError, FormMessage } from "@/components/ui";
-import { addTransaction, searchEvents } from "./actions";
+import {
+  ActionFeedback,
+  dialogContentClassName,
+  dialogDescriptionClassName,
+  dialogFooterClassName,
+  dialogHeaderClassName,
+  dialogSurfaceClassName,
+  dialogTitleClassName,
+  FieldError,
+  FormMessage,
+} from "@/components/ui";
+import { SearchableSelect } from "@/components/searchable-select";
+import { addTransaction } from "./actions";
+import { EventSearchSelect } from "./event-search-select";
 
 type PointEvent = Pick<Tables<"events">, "id" | "name" | "event_date">;
-
-export function mergeEventSearchResults(
-  current: PointEvent[],
-  results: PointEvent[],
-) {
-  const byId = new Map(current.map((event) => [event.id, event]));
-  for (const event of results) byId.set(event.id, event);
-  return [...byId.values()];
-}
 
 export default function TransactionForm({
   officers,
@@ -90,19 +92,16 @@ export default function TransactionForm({
           )
             event.preventDefault();
         }}
-        className="m-auto max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-xl overflow-y-auto rounded-lg border border-border bg-surface p-5 text-foreground backdrop:bg-black/60 sm:p-6"
+        className={dialogSurfaceClassName}
       >
-        <div className="space-y-5">
-          <header className="space-y-1.5">
-            <h2
-              id="add-transaction-title"
-              className="text-lg font-semibold tracking-tight"
-            >
+        <div className={dialogContentClassName}>
+          <header className={dialogHeaderClassName}>
+            <h2 id="add-transaction-title" className={dialogTitleClassName}>
               Add transaction
             </h2>
             <p
               id="add-transaction-description"
-              className="text-sm leading-5 text-secondary"
+              className={dialogDescriptionClassName}
             >
               Record a manual award or correct an existing Point total.
             </p>
@@ -111,6 +110,7 @@ export default function TransactionForm({
             key={formKey}
             officers={officers}
             events={events}
+            dialogRef={dialogRef}
             onSuccess={handleSuccess}
           />
         </div>
@@ -122,16 +122,14 @@ export default function TransactionForm({
 function TransactionFields({
   officers,
   events,
+  dialogRef,
   onSuccess,
 }: {
   officers: Pick<Tables<"officers">, "id" | "name">[];
   events: PointEvent[];
+  dialogRef: React.RefObject<HTMLDialogElement | null>;
   onSuccess: (message: string) => void;
 }) {
-  const [search, setSearch] = useState("");
-  const [availableEvents, setAvailableEvents] = useState(events);
-  const [searching, setSearching] = useState(false);
-  const [searchError, setSearchError] = useState("");
   const [state, action, pending] = useActionState(
     addTransaction,
     initialFormActionState,
@@ -142,21 +140,6 @@ function TransactionFields({
     if (state.success) onSuccess(state.success);
   }, [onSuccess, state.success]);
 
-  async function searchOlderEvents() {
-    setSearching(true);
-    setSearchError("");
-    try {
-      const results = await searchEvents(search);
-      setAvailableEvents((current) =>
-        mergeEventSearchResults(current, results),
-      );
-    } catch {
-      setSearchError("Could not search events");
-    } finally {
-      setSearching(false);
-    }
-  }
-
   return (
     <form
       key={JSON.stringify(state.values ?? {})}
@@ -165,30 +148,21 @@ function TransactionFields({
       onReset={(event) => event.preventDefault()}
       className="!grid !max-w-none grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2"
     >
-      <label className="sm:col-span-1">
-        Officer
-        <select
-          data-initial-focus
-          name="officer_id"
-          required
-          aria-invalid={Boolean(fieldErrors.officer_id)}
-          aria-describedby={
-            fieldErrors.officer_id ? "transaction-officer-error" : undefined
-          }
-          defaultValue={submittedValue(state.values, "officer_id")}
-          disabled={pending}
-        >
-          <option value="">Select officer</option>
-          {officers.map((officer) => (
-            <option key={officer.id} value={officer.id}>
-              {officer.name}
-            </option>
-          ))}
-        </select>
-        <FieldError id="transaction-officer-error">
-          {fieldErrors.officer_id}
-        </FieldError>
-      </label>
+      <SearchableSelect
+        name="officer_id"
+        label="Officer"
+        options={officers.map((officer) => ({
+          id: String(officer.id),
+          label: officer.name,
+        }))}
+        initialValue={submittedValue(state.values, "officer_id")}
+        required
+        error={fieldErrors.officer_id}
+        disabled={pending}
+        placeholder="Search Officers"
+        portalContainer={dialogRef}
+        initialFocus
+      />
       <label>
         Points
         <input
@@ -241,57 +215,19 @@ function TransactionFields({
           {fieldErrors.award_type}
         </FieldError>
       </label>
-      <label>
-        Search older events
-        <input
-          type="search"
-          value={search}
-          onChange={(change) => setSearch(change.target.value)}
-          placeholder="At least two letters"
-          disabled={pending}
-        />
-      </label>
-      <button
-        type="button"
-        className="button-secondary self-end sm:col-span-2 sm:justify-self-start"
-        disabled={pending || searching || search.trim().length < 2}
-        onClick={searchOlderEvents}
-      >
-        {searching ? "Searching…" : "Search events"}
-      </button>
-      {searchError && (
-        <div className="sm:col-span-2">
-          <FormMessage kind="error">{searchError}</FormMessage>
-        </div>
-      )}
-      <label className="sm:col-span-2">
-        Event (optional)
-        <select
-          name="event_id"
-          aria-invalid={Boolean(fieldErrors.event_id)}
-          aria-describedby={
-            fieldErrors.event_id ? "transaction-event-error" : undefined
-          }
-          defaultValue={submittedValue(state.values, "event_id")}
-          disabled={pending}
-        >
-          <option value="">No event</option>
-          {availableEvents.map((event) => (
-            <option key={event.id} value={event.id}>
-              {formatEventFilterOption(event.name, event.event_date)}
-            </option>
-          ))}
-        </select>
-        <FieldError id="transaction-event-error">
-          {fieldErrors.event_id}
-        </FieldError>
-      </label>
+      <EventSearchSelect
+        events={events}
+        initialValue={submittedValue(state.values, "event_id")}
+        error={fieldErrors.event_id}
+        disabled={pending}
+        portalContainer={dialogRef}
+      />
       {(state.error || state.success) && (
         <div className="sm:col-span-2">
           <ActionFeedback state={state} />
         </div>
       )}
-      <div className="flex justify-end gap-2 border-t border-border pt-4 sm:col-span-2">
+      <div className={`${dialogFooterClassName} sm:col-span-2`}>
         <button
           type="button"
           className="button-secondary"

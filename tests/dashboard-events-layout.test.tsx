@@ -85,6 +85,7 @@ let transactions: {
   tasks: { id: number; title: string } | null;
 }[];
 let dashboardQueries: { table: string; operations: [string, unknown[]][] }[];
+let countedEventIds: number[];
 const from = vi.fn((table: string) => {
   const operations: [string, unknown[]][] = [];
   const result = {
@@ -145,12 +146,45 @@ const from = vi.fn((table: string) => {
       operations.push(["limit", args]);
       return query;
     },
+    range: (...args: unknown[]) => {
+      operations.push(["range", args]);
+      return query;
+    },
     single: () => {
       operations.push(["single", []]);
       return Promise.resolve(result);
     },
-    then: (resolve: (value: typeof result) => unknown) =>
-      Promise.resolve(result).then(resolve),
+    then: (resolve: (value: typeof result & { count?: number }) => unknown) => {
+      const range = operations.find(([method]) => method === "range")?.[1];
+      const head = operations.some(
+        ([method, args]) =>
+          method === "select" &&
+          (args[1] as { head?: boolean } | undefined)?.head,
+      );
+      return Promise.resolve({
+        ...result,
+        data:
+          table === "events" && range
+            ? events.slice(Number(range[0]), Number(range[1]) + 1)
+            : table === "events" &&
+                operations.some(([method]) => method === "limit")
+              ? events.slice(
+                  0,
+                  Number(
+                    operations.find(([method]) => method === "limit")?.[1][0],
+                  ),
+                )
+              : table === "point_transactions"
+                ? transactions.slice(
+                    0,
+                    Number(
+                      operations.find(([method]) => method === "limit")?.[1][0],
+                    ),
+                  )
+                : result.data,
+        count: table === "events" && head ? events.length : undefined,
+      }).then(resolve);
+    },
   };
   dashboardQueries.push({ table, operations });
   return query;
@@ -165,6 +199,7 @@ beforeEach(() => {
   ] as never);
   transactions = [];
   dashboardQueries = [];
+  countedEventIds = [];
   events = [
     upcoming,
     { ...upcoming, id: 2, name: "Available event", event_officers: [] },
@@ -173,40 +208,51 @@ beforeEach(() => {
   vi.mocked(getAuthorizationContext).mockResolvedValue(actor as never);
   vi.mocked(createClient).mockResolvedValue({
     from,
-    rpc: async () => ({
-      data: events.map((event) => ({
+    rpc: () => {
+      const counts = events.map((event) => ({
         event_id: event.id,
         confirmed_count: event.event_officers.length,
         waitlist_count: event.event_waitlist?.length ?? 0,
-      })),
-      error: null,
-    }),
+      }));
+      return Object.assign(Promise.resolve({ data: counts, error: null }), {
+        in: async (_column: string, ids: number[]) => {
+          countedEventIds = ids;
+          return {
+            data: counts.filter(({ event_id }) => ids.includes(event_id)),
+            error: null,
+          };
+        },
+      });
+    },
   } as never);
 });
 const renderEvents = async () =>
   renderToStaticMarkup(await EventsPage({ searchParams: Promise.resolve({}) }));
 
-it("groups relationships into distinct sections from the filtered event query", async () => {
+it("renders bounded Events in period tables grouped by participation", async () => {
   const html = await renderEvents();
-  const your = html
-    .split('aria-label="Upcoming Events — Your events"')[1]
-    .split("</section>")[0];
-  const other = html
-    .split('aria-label="Upcoming Events — Other events"')[1]
-    .split("</section>")[0];
-  expect(your).toContain("Participating event");
-  expect(your).not.toContain("Available event");
-  expect(other).toContain("Available event");
-  expect(other).toContain("Meeting");
-  expect(other).toContain("Upcoming");
-  expect(other).not.toContain("Participating event");
-  expect(other).toContain('<th scope="col">Action</th>');
-  expect(html).not.toMatch(/Your participation|Your signup/i);
-  expect(other).toContain('aria-label="Sign up for Available event"');
-  expect(your).not.toContain("Sign up for");
-  expect(from.mock.calls.filter(([table]) => table === "events")).toHaveLength(
-    2,
+  expect(html).toContain(">Your events</h3>");
+  expect(html).toContain(">Other events</h3>");
+  expect(html).toContain(
+    'aria-label="Events table: Upcoming events: Your events"',
   );
+  const your = html.split("Participating event</a>")[1].split("</tr>")[0];
+  const other = html.split("Available event</a>")[1].split("</tr>")[0];
+  expect(html).not.toContain('scope="rowgroup"');
+  expect(your).not.toContain("Sign up for");
+  expect(other).toContain('aria-label="Sign up for Available event"');
+  expect(other).toContain("Upcoming");
+  expect(html).toContain('<th scope="col">Action</th>');
+  expect(html).not.toMatch(/Your participation|Your signup/i);
+  expect(from.mock.calls.filter(([table]) => table === "events")).toHaveLength(
+    3,
+  );
+  expect(
+    dashboardQueries.find(
+      ({ table, operations }) =>
+        table === "events" && operations.some(([method]) => method === "range"),
+    )?.operations,
+  ).toContainEqual(["range", [0, 7]]);
 });
 
 it("offers signup while happening, but never for past, cancelled, removed or processed events", async () => {
@@ -246,8 +292,7 @@ it("offers signup while happening, but never for past, cancelled, removed or pro
 it("shows useful empty messages without empty tables", async () => {
   events = [];
   const html = await renderEvents();
-  expect(html).toContain("No events this week.");
-  expect(html).toContain("No upcoming events.");
+  expect(html).toContain("No current events.");
   expect(html).not.toContain("<table");
 });
 
@@ -295,7 +340,9 @@ it("preserves all three summary metric values and the existing summary/activity 
     ["neq", ["status", "cancelled"]],
     ["is", ["deleted_at", null]],
     ["gt", ["starts_at", expect.any(String)]],
-    ["order", ["event_date"]],
+    ["order", ["starts_at"]],
+    ["order", ["id"]],
+    ["limit", [4]],
   ]);
   expect(operations("point_transactions")).toEqual([
     [
@@ -307,7 +354,7 @@ it("preserves all three summary metric values and the existing summary/activity 
     ["is", ["removed_at", null]],
     ["order", ["created_at", { ascending: false }]],
     ["order", ["id", { ascending: false }]],
-    ["limit", [10]],
+    ["limit", [4]],
   ]);
 });
 
@@ -397,7 +444,7 @@ it("keeps main pages free of contextual navigation and shows the compact upcomin
   expect(html).toContain("Jan 1 · 5:00–6:00 AM");
 });
 
-it("summarizes all upcoming events in a named list with signup context and full-page links", async () => {
+it("shows a bounded upcoming-event preview with signup context and full-page links", async () => {
   events = Array.from({ length: 12 }, (_, index) => ({
     ...upcoming,
     id: index + 1,
@@ -409,15 +456,17 @@ it("summarizes all upcoming events in a named list with signup context and full-
     .split('aria-label="Upcoming events"')[1]
     .split("</section>")[0];
   expect(list).toContain("<ul");
-  expect(list.match(/<li /g)).toHaveLength(12);
-  expect(list).toContain('href="/events/12"');
+  expect(list.match(/<li /g)).toHaveLength(4);
+  expect(list).not.toContain('href="/events/12"');
   expect(list).toContain("Signed up");
   expect(list).toContain("Not signed up");
   expect(list).toMatch(/class="text-info">Signed up/);
   expect(list).toMatch(/class="text-muted">Not signed up/);
   expect(list).toContain("1 officer");
   expect(list).toContain('href="/events"');
-  expect(html).toContain('href="/points"');
+  expect(list).toContain("Next events · El Paso time");
+  expect(countedEventIds).toEqual([1, 2, 3, 4]);
+  expect(html).toContain('href="/points?view=history"');
   expect(html).not.toContain("<table");
   expect(html).toContain('data-page-width="wide"');
 });
@@ -463,6 +512,35 @@ it("summarizes signed point values with officer and event/task links or a manual
   expect(list).not.toContain("<table");
 });
 
+it("shows only the four newest Point transactions and keeps full Points navigation", async () => {
+  const transaction = {
+    id: 1,
+    points: 2.5,
+    reason: "Participation",
+    created_at: "2026-10-03T12:00:00Z",
+    officers: { id: 8, name: "Local Officer" },
+    events: null,
+    tasks: null,
+  };
+  transactions = Array.from({ length: 8 }, (_, index) => ({
+    ...transaction,
+    id: index + 1,
+    reason: `Transaction ${index + 1}`,
+    created_at: `2026-10-${String(13 - index).padStart(2, "0")}T12:00:00Z`,
+  }));
+
+  const html = renderToStaticMarkup(await DashboardPage());
+  const list = html
+    .split('aria-label="Recent point activity"')[1]
+    .split("</section>")[0];
+  expect(list.match(/<li /g)).toHaveLength(4);
+  expect(list).toContain("Transaction 1");
+  expect(list).toContain("Transaction 4");
+  expect(list).not.toContain("Transaction 5");
+  expect(list).toContain("Latest 4 transactions");
+  expect(list).toContain('href="/points?view=history"');
+});
+
 it("keeps dashboard empty states and destination links without empty lists or tables", async () => {
   events = [];
   const html = renderToStaticMarkup(await DashboardPage());
@@ -470,6 +548,7 @@ it("keeps dashboard empty states and destination links without empty lists or ta
   expect(html).toContain("No point transactions yet.");
   expect(html).toContain("View all Events");
   expect(html).toContain("View all Points");
+  expect(html).toContain('href="/points?view=history"');
   expect(html).not.toContain("<ul");
   expect(html).not.toContain("<table");
 });

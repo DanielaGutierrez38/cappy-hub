@@ -6,6 +6,7 @@ import {
   safeReturnTo,
   withReturnTo,
 } from "@/lib/return-context";
+import { listPageUrl } from "@/lib/list-url";
 
 it.each([
   undefined,
@@ -97,6 +98,42 @@ it.each(["/points", "/system-log"] as const)(
   },
 );
 
+it("preserves Officers directory and review pages through record navigation", () => {
+  const destination = listReturnUrl("/officers", {
+    q: "Alex",
+    branch: "3",
+    page: "2",
+    view: "warnings",
+    reviewPage: "3",
+    unrelated: "ignored",
+  });
+  expect(destination).toBe(
+    "/officers?q=Alex&branch=3&page=2&view=warnings&reviewPage=3",
+  );
+  expect(safeReturnTo(destination)).toBe(destination);
+  expect(
+    new URL(
+      withReturnTo("/officers/7", destination),
+      "https://cappy.invalid",
+    ).searchParams.get("returnTo"),
+  ).toBe(destination);
+  expect(listPageUrl("/officers", new URLSearchParams("q=Alex"), 2)).toBe(
+    "/officers?q=Alex&page=2",
+  );
+});
+
+it("preserves the Points History view and its page through record navigation", () => {
+  const destination = listReturnUrl("/points", {
+    view: "history",
+    q: "workshop",
+    officer: "12",
+    page: "3",
+  });
+
+  expect(destination).toBe("/points?view=history&q=workshop&officer=12&page=3");
+  expect(safeReturnTo(destination)).toBe(destination);
+});
+
 it("omits repeated query values just as list schemas do", () => {
   expect(
     listReturnUrl("/tasks", { q: ["a", "b"], status: "", branch: "2" }),
@@ -111,8 +148,14 @@ it("preserves the explicit Past Task view with workflow and assignment filters",
       status: "complete",
       branch: "2",
       assignee: "123",
+      page: "3",
     }),
-  ).toBe("/tasks?q=flyer&view=past&status=complete&branch=2&assignee=123");
+  ).toBe(
+    "/tasks?q=flyer&view=past&status=complete&branch=2&assignee=123&page=3",
+  );
+  expect(
+    listPageUrl("/tasks", new URLSearchParams("q=flyer&assignee=123"), 2),
+  ).toBe("/tasks?q=flyer&assignee=123&page=2");
 });
 
 it("does not retain the removed Event browse parameter", () => {
