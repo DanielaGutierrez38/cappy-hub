@@ -87,6 +87,32 @@ it("lists slots in stable order with repeated difficulty and repeated presenters
   expect(html).toContain('href="https://example.org/two-sum"');
 });
 
+it("renders a fourth slot with arbitrary difficulty and no required difficulty", () => {
+  const html = render({
+    slots: [
+      ...slots,
+      slot({
+        id: 14,
+        position: 4,
+        presentation_title: "Interview strategy talk",
+        difficulty: "Nightmare",
+      }),
+    ],
+  });
+
+  expect(html).toContain("Presenters (4)");
+  expect(html).toContain("2 of 4 slots open");
+  expect(html).toContain("Nightmare");
+  expect(html.indexOf("Slot 3")).toBeLessThan(html.indexOf("Slot 4"));
+  const slotWithoutDifficulty = html.slice(
+    html.indexOf("Slot 3"),
+    html.indexOf("Slot 4"),
+  );
+  expect(slotWithoutDifficulty).toContain("Interview tips");
+  expect(slotWithoutDifficulty).not.toContain("Medium");
+  expect(slotWithoutDifficulty).not.toContain("Nightmare");
+});
+
 it("offers an Officer Volunteer on open slots and no management controls", () => {
   const html = render({});
   expect(html).toContain('aria-label="Volunteer for slot 2"');
