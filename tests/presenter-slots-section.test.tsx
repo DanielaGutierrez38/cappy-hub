@@ -128,7 +128,29 @@ it("lets a presenter step down from each of their own slots", () => {
   const html = render({ actorId: 8 });
   expect(html).toContain('aria-label="Step down from slot 1"');
   expect(html).toContain('aria-label="Step down from slot 3"');
+  expect(html.match(/Edit details/g)).toHaveLength(2);
   expect(html).toContain('aria-label="Volunteer for slot 2"');
+});
+
+it("offers optional editing immediately after an Officer claims a slot", () => {
+  const html = render({
+    actorId: 9,
+    slots: [
+      slots[0],
+      slot({
+        id: 12,
+        position: 2,
+        officer_id: 9,
+        officers: { id: 9, name: "Riley Garcia" },
+      }),
+      slots[2],
+    ],
+  });
+
+  expect(html).toContain('aria-label="Step down from slot 2"');
+  expect(html).toContain("Edit details");
+  expect(html).not.toContain("Add presenter slot");
+  expect(html).not.toContain("Assign presenter");
 });
 
 it("gives managers add, reorder, assign, remove and detail controls", () => {

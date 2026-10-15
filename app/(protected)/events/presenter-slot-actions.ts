@@ -20,6 +20,8 @@ import {
 type SupabaseClient = Awaited<ReturnType<typeof createClient>>;
 
 const outsideScope = "Event outside branch scope";
+const cannotEditPresenterSlot =
+  "Cannot manage another officer presenter slot for this event";
 const slotDetailFields = [
   "slot_id",
   "presentation_title",
@@ -47,6 +49,16 @@ async function slotEventId(supabase: SupabaseClient, slotId: number) {
     .maybeSingle();
   if (error) throw new Error("Failed to load presenter slot");
   return data?.event_id;
+}
+
+async function slotDetailsRecord(supabase: SupabaseClient, slotId: number) {
+  const { data, error } = await supabase
+    .from("presentation_slots")
+    .select("event_id, officer_id")
+    .eq("id", slotId)
+    .maybeSingle();
+  if (error) throw new Error("Failed to load presenter slot");
+  return data;
 }
 
 export async function changePresenterSlot(
@@ -180,11 +192,16 @@ export async function updatePresenterSlotDetails(
     return validationFailure(validation.error, formData, slotDetailFields);
   const details = validation.data;
   const supabase = await createClient();
-  const eventId = await slotEventId(supabase, details.slot_id);
-  if (eventId === undefined)
+  const slot = await slotDetailsRecord(supabase, details.slot_id);
+  if (slot === null)
     return formFailure("Presenter slot not found", formData, slotDetailFields);
-  if (!canManageEvent(actor, await eventBranchIds(supabase, eventId)))
-    return formFailure(outsideScope, formData, slotDetailFields);
+  const isPresenter = slot.officer_id === actor.id;
+  const canManage = canManageEvent(
+    actor,
+    await eventBranchIds(supabase, slot.event_id),
+  );
+  if (!isPresenter && !canManage)
+    return formFailure(cannotEditPresenterSlot, formData, slotDetailFields);
   const { error } = await supabase.rpc("update_presenter_slot_details", {
     p_slot_id: details.slot_id,
     p_title: details.presentation_title,

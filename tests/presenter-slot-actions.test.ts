@@ -27,7 +27,7 @@ import {
 
 const initial = { error: "", success: "" };
 const rpc = vi.fn();
-let slotEvent: { event_id: number } | null;
+let slotEvent: { event_id: number; officer_id: number | null } | null;
 let eventBranches: { branch_id: number }[];
 const from = vi.fn((table: string) => {
   const query = {
@@ -63,7 +63,7 @@ const asIntroLead = () =>
 
 beforeEach(() => {
   vi.clearAllMocks();
-  slotEvent = { event_id: 12 };
+  slotEvent = { event_id: 12, officer_id: null };
   eventBranches = [{ branch_id: 1 }];
   asOfficer();
   vi.mocked(createClient).mockResolvedValue({ rpc, from } as never);
@@ -153,7 +153,7 @@ it("blocks a Lead outside the Event branch from managing slots", async () => {
         form({ slot_id: "3", presentation_title: "Two Sum" }),
       )
     ).error,
-  ).toBe("Event outside branch scope");
+  ).toBe("Cannot manage another officer presenter slot for this event");
   expect(rpc).not.toHaveBeenCalled();
 });
 
@@ -241,6 +241,49 @@ it("saves free-text details, including blank topic and difficulty", async () => 
     p_notes: "",
   });
 });
+
+it("lets an Officer edit the details for their currently assigned slot", async () => {
+  slotEvent = { event_id: 12, officer_id: 8 };
+  const result = await updatePresenterSlotDetails(
+    initial,
+    form({
+      slot_id: "3",
+      officer_id: "9",
+      presentation_title: "My interview talk",
+    }),
+  );
+
+  expect(result).toEqual({
+    error: "",
+    success: "Presenter slot details saved",
+  });
+  expect(rpc).toHaveBeenCalledWith("update_presenter_slot_details", {
+    p_slot_id: 3,
+    p_title: "My interview talk",
+    p_url: "",
+    p_difficulty: "",
+    p_notes: "",
+  });
+});
+
+it.each([
+  { ownerId: null, description: "an empty slot" },
+  { ownerId: 9, description: "another Officer's slot" },
+])(
+  "rejects an Officer editing $description before calling the RPC",
+  async ({ ownerId }) => {
+    slotEvent = { event_id: 12, officer_id: ownerId };
+    const result = await updatePresenterSlotDetails(
+      initial,
+      form({ slot_id: "3", presentation_title: "Not mine" }),
+    );
+
+    expect(result.error).toBe(
+      "Cannot manage another officer presenter slot for this event",
+    );
+    expect(rpc).not.toHaveBeenCalled();
+  },
+);
 
 it("rejects an invalid resource link before calling the RPC", async () => {
   asIntroLead();

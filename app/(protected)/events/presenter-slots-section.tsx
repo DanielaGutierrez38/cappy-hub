@@ -181,7 +181,7 @@ export default function PresenterSlotsSection({
                     )}
                   </div>
                 )}
-                {open && canManage && (
+                {open && (canManage || ownSlot) && (
                   <div className="flex flex-wrap gap-x-5 gap-y-2">
                     {presenter === null && officers.length > 0 && (
                       <details className="event-roster-disclosure">
