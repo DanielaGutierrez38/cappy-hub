@@ -39,6 +39,7 @@ import TaskDetail from "@/app/(protected)/tasks/[id]/page";
 import TaskActionForm from "@/app/(protected)/tasks/task-action-form";
 import { formatEventSchedule } from "@/lib/presentation";
 import { TASK_TYPES } from "@/lib/task-types";
+import { redirect } from "next/navigation";
 
 const officer = {
   id: 7,
@@ -92,8 +93,36 @@ const task = {
   due_date: "2099-10-08",
 };
 let officersForList: Record<string, unknown>[];
+let eventRosterRows: Record<string, unknown>[];
+let eventRosterCount = 0;
+let eventWaitlistRows: Record<string, unknown>[];
+let eventWaitlistCount = 0;
+let eventGlobalWaitlistCount = 0;
+let personalRosterCount = 0;
+let personalWaitlistCount = 0;
+let eventTaskRows: Record<string, unknown>[];
+let eventTaskCount = 0;
+let eventPointCount = 0;
+let eventPointRanges: [number, number][];
+let eventRelatedRanges: [string, number, number][];
+let eventRosterOrderCalls: string[];
+let eventRelatedOrderCalls: [string, string][];
 beforeEach(() => {
   officersForList = [];
+  eventRosterRows = [];
+  eventRosterCount = 0;
+  eventWaitlistRows = [];
+  eventWaitlistCount = 0;
+  eventGlobalWaitlistCount = 0;
+  personalRosterCount = 0;
+  personalWaitlistCount = 0;
+  eventTaskRows = [];
+  eventTaskCount = 0;
+  eventPointCount = 0;
+  eventPointRanges = [];
+  eventRelatedRanges = [];
+  eventRosterOrderCalls = [];
+  eventRelatedOrderCalls = [];
   vi.mocked(useActionState).mockReturnValue([
     { error: "", success: "" },
     vi.fn(),
@@ -102,11 +131,37 @@ beforeEach(() => {
   vi.mocked(getAuthorizationContext).mockResolvedValue({ id: 1 } as never);
   vi.mocked(canManageEvent).mockReturnValue(true);
   vi.mocked(createClient).mockResolvedValue({
-    rpc: async () => ({ data: [], error: null }),
-    from: (table: string) => {
+    rpc: () => {
       const query = {
+        eventId: 0,
+        eq: (_column: string, value: number) => {
+          query.eventId = value;
+          return query;
+        },
+        then: (resolve: (value: unknown) => unknown) =>
+          Promise.resolve({
+            data: [
+              {
+                event_id: query.eventId,
+                confirmed_count: eventRosterCount,
+                waitlist_count: eventGlobalWaitlistCount,
+              },
+            ],
+            error: null,
+          }).then(resolve),
+      };
+      return query;
+    },
+    from: (table: string) => {
+      const filters = new Map<string, unknown>();
+      const query = {
+        rangeStart: 0,
+        rangeEnd: Number.POSITIVE_INFINITY,
         select: () => query,
-        eq: () => query,
+        eq: (column: string, value: unknown) => {
+          filters.set(column, value);
+          return query;
+        },
         gt: () => query,
         gte: () => query,
         in: () => query,
@@ -114,8 +169,29 @@ beforeEach(() => {
         not: () => query,
         lt: () => query,
         lte: () => query,
-        order: () => query,
-        range: () => query,
+        order: (column: string, options?: { referencedTable?: string }) => {
+          eventRelatedOrderCalls.push([
+            table,
+            options?.referencedTable
+              ? `${column}:${options.referencedTable}`
+              : column,
+          ]);
+          if (table === "event_officers") {
+            eventRosterOrderCalls.push(
+              options?.referencedTable
+                ? `${column}:${options.referencedTable}`
+                : column,
+            );
+          }
+          return query;
+        },
+        range: (from: number, to: number) => {
+          query.rangeStart = from;
+          query.rangeEnd = to;
+          eventRelatedRanges.push([table, from, to]);
+          if (table === "point_transactions") eventPointRanges.push([from, to]);
+          return query;
+        },
         limit: () => query,
         or: () => query,
         single: async () => ({
@@ -139,8 +215,38 @@ beforeEach(() => {
         }),
         then: (resolve: (value: unknown) => unknown) =>
           Promise.resolve({
-            data: table === "officers" ? officersForList : [],
-            count: table === "officers" ? officersForList.length : 0,
+            data:
+              table === "officers"
+                ? officersForList
+                : table === "event_officers"
+                  ? eventRosterRows.slice(query.rangeStart, query.rangeEnd + 1)
+                  : table === "event_waitlist"
+                    ? eventWaitlistRows.slice(
+                        query.rangeStart,
+                        query.rangeEnd + 1,
+                      )
+                    : table === "task_events"
+                      ? eventTaskRows.slice(
+                          query.rangeStart,
+                          query.rangeEnd + 1,
+                        )
+                      : [],
+            count:
+              table === "officers"
+                ? officersForList.length
+                : table === "event_officers"
+                  ? filters.has("officer_id")
+                    ? personalRosterCount
+                    : eventRosterCount
+                  : table === "event_waitlist"
+                    ? filters.has("officer_id")
+                      ? personalWaitlistCount
+                      : eventWaitlistCount
+                    : table === "task_events"
+                      ? eventTaskCount
+                      : table === "point_transactions"
+                        ? eventPointCount
+                        : 0,
             error: null,
           }).then(resolve),
       };
@@ -371,7 +477,7 @@ it("groups Event details, files and participation while retaining management con
   expect(details).toContain('rel="noopener noreferrer"');
   const participation = html.split('aria-label="Participation"')[1];
   expect(participation).toContain("Your participation:");
-  expect(participation).toContain("Signed-up officers");
+  expect(participation).toContain("Participation");
   expect(participation).toContain("No officers signed up.");
   expect(participation).not.toContain("<table");
   expect(participation).toContain("No active officers are available to add.");
@@ -391,44 +497,219 @@ it("keeps manager bulk signup available when eligible Officers exist", async () 
   expect(html).toContain('name="officer_ids" value="4"');
 });
 
-it("renders populated Event participation as a compact semantic table", async () => {
-  Object.assign(event, {
-    event_officers: [
-      { officers: { id: 3, name: "Zulu Officer" } },
-      { officers: { id: 2, name: "Alpha Officer" } },
-      { officers: { id: 1, name: "Bravo Officer" } },
-    ],
-  });
+it("renders a bounded populated Event roster preview with a full-roster link", async () => {
+  eventRosterCount = 7;
+  eventRosterRows = ["Alpha Officer", "Bravo Officer", "Charlie Officer"].map(
+    (name, index) => ({
+      officer_id: index + 1,
+      officers: { id: index + 1, name },
+    }),
+  );
 
   const html = renderToStaticMarkup(
     await EventDetail({ params: Promise.resolve({ id: "7" }) }),
   );
   const participation = html.split('aria-label="Participation"')[1];
 
-  expect(participation).toContain(
-    'class="overflow-x-auto rounded-lg border border-border table-frame--compact table-frame--keyboard-scroll" role="region" aria-label="Event signups" tabindex="0"',
-  );
-  expect(participation).toContain('<table class="min-w-full">');
-  expect(participation).toContain(">Officer</th>");
-  expect(participation).toContain(">Signup</th>");
-  const signupRows = participation
-    .split('<table class="min-w-full">')[1]
-    .split("</table>")[0]
-    .match(/<tr>[\s\S]*?<\/tr>/g);
-  expect(signupRows).toHaveLength(4);
-  expect(signupRows?.[1]).toContain("Alpha Officer");
-  expect(signupRows?.[1]).toContain('name="officer_id" value="2"');
-  expect(signupRows?.[1]).toContain("Remove signup");
-  expect(signupRows?.[2]).toContain("Bravo Officer");
-  expect(signupRows?.[2]).toContain('name="officer_id" value="1"');
-  expect(signupRows?.[2]).toContain("Remove signup");
-  expect(signupRows?.[3]).toContain("Zulu Officer");
-  expect(signupRows?.[3]).toContain('name="officer_id" value="3"');
-  expect(signupRows?.[3]).toContain("Remove signup");
-  expect(participation).toContain("Remove signup");
+  expect(participation).toContain("Alpha Officer");
+  expect(participation).toContain("Bravo Officer");
+  expect(participation).toContain("Charlie Officer");
+  expect(participation).not.toContain("Delta Officer");
+  expect(participation).toContain("View full roster");
+  expect(participation).not.toContain("Remove signup");
   expect(participation).not.toContain("No officers signed up.");
+  expect(eventRelatedRanges).toContainEqual(["event_officers", 0, 2]);
+});
 
-  Object.assign(event, { event_officers: [] });
+it("paginates the complete roster in database name order with signup removal available", async () => {
+  const names = [
+    "Alpha",
+    "Alpha",
+    "Bravo",
+    "Charlie",
+    "Delta",
+    "Echo",
+    "Foxtrot",
+    "Hotel",
+  ];
+  eventRosterCount = names.length;
+  const officerIds = [7, 8, 6, 5, 4, 3, 2, 1];
+  eventRosterRows = names.map((name, index) => ({
+    officer_id: officerIds[index],
+    officers: { id: officerIds[index], name },
+  }));
+
+  const pageOne = await EventDetail({
+    params: Promise.resolve({ id: "7" }),
+    searchParams: Promise.resolve({
+      section: "roster",
+      returnTo: "/events?status=past",
+    }),
+  });
+  const htmlOne = renderToStaticMarkup(pageOne);
+  const rosterOne = htmlOne.split('aria-label="Confirmed roster"')[1];
+  expect(rosterOne).toContain('aria-label="Select roster list page"');
+  expect(rosterOne).toContain("of 2");
+  expect(rosterOne).toContain(
+    'href="/events/7?section=roster&amp;page=2&amp;returnTo=%2Fevents%3Fstatus%3Dpast"',
+  );
+  expect(rosterOne.indexOf("Alpha")).toBeLessThan(rosterOne.indexOf("Echo"));
+  expect(rosterOne).toContain("Remove signup");
+  expect(rosterOne).not.toContain("Hotel");
+
+  const pageTwo = await EventDetail({
+    params: Promise.resolve({ id: "7" }),
+    searchParams: Promise.resolve({ section: "roster", page: "2" }),
+  });
+  const htmlTwo = renderToStaticMarkup(pageTwo);
+  const rosterTwo = htmlTwo.split('aria-label="Confirmed roster"')[1];
+  expect(rosterTwo).toContain("Hotel");
+  expect(rosterTwo).not.toContain("Alpha</a>");
+  expect(rosterTwo.match(/<tr>/g)).toHaveLength(3);
+  expect(eventRelatedRanges).toContainEqual(["event_officers", 0, 5]);
+  expect(eventRelatedRanges).toContainEqual(["event_officers", 6, 11]);
+  expect(eventRosterOrderCalls).toEqual([
+    "officers(name)",
+    "officer_id",
+    "officers(name)",
+    "officer_id",
+  ]);
+});
+
+it("shows the current Officer's signup removal in Overview outside the roster preview", async () => {
+  vi.mocked(getAuthorizationContext).mockResolvedValue({ id: 99 } as never);
+  eventRosterCount = 8;
+  personalRosterCount = 1;
+  eventRosterRows = Array.from({ length: 3 }, (_, index) => ({
+    officer_id: index + 1,
+    officers: { id: index + 1, name: `Officer ${index + 1}` },
+  }));
+
+  const html = renderToStaticMarkup(
+    await EventDetail({ params: Promise.resolve({ id: "7" }) }),
+  );
+  const participation = html.split('aria-label="Participation"')[1];
+  expect(participation).toContain("Remove signup");
+  expect(participation).toContain('name="officer_id" value="99"');
+  expect(participation).not.toContain("Officer 99");
+});
+
+it("paginates the FIFO waitlist with a bounded database query", async () => {
+  eventWaitlistCount = 8;
+  eventGlobalWaitlistCount = 8;
+  eventWaitlistRows = Array.from({ length: 8 }, (_, index) => ({
+    id: index + 1,
+    joined_at: `2026-10-${String(index + 1).padStart(2, "0")}T12:00:00Z`,
+    officer_id: index + 1,
+    officers: {
+      id: index + 1,
+      name: `Officer ${index + 1}`,
+      status: "active",
+    },
+  }));
+
+  const html = renderToStaticMarkup(
+    await EventDetail({
+      params: Promise.resolve({ id: "7" }),
+      searchParams: Promise.resolve({ section: "waitlist", page: "2" }),
+    }),
+  );
+
+  expect(html).toContain('aria-label="Select waitlist list page"');
+  expect(html).toContain("of 2");
+  expect(html).toContain("Officer 7");
+  expect(eventRelatedRanges).toContainEqual(["event_waitlist", 6, 11]);
+  expect(
+    eventRelatedOrderCalls.filter(([table]) => table === "event_waitlist"),
+  ).toEqual([
+    ["event_waitlist", "joined_at"],
+    ["event_waitlist", "id"],
+  ]);
+});
+
+it("paginates linked Tasks with a bounded database query", async () => {
+  eventTaskCount = 7;
+  eventTaskRows = Array.from({ length: 7 }, (_, index) => ({
+    task_id: 17 - index,
+    tasks: {
+      id: 17 - index,
+      title: `Task ${index + 1}`,
+      removed_at: null,
+    },
+  }));
+
+  const html = renderToStaticMarkup(
+    await EventDetail({
+      params: Promise.resolve({ id: "7" }),
+      searchParams: Promise.resolve({ section: "tasks", page: "2" }),
+    }),
+  );
+
+  expect(html).toContain('aria-label="Select tasks list page"');
+  expect(html).toContain("of 2");
+  expect(html).toContain("Task 7");
+  expect(eventRelatedRanges).toContainEqual(["task_events", 6, 11]);
+  expect(
+    eventRelatedOrderCalls.filter(([table]) => table === "task_events"),
+  ).toEqual([
+    ["task_events", "tasks(title)"],
+    ["task_events", "task_id"],
+  ]);
+});
+
+it("loads Event point history by URL page beyond the previous 100-row preview", async () => {
+  eventPointCount = 125;
+  const html = renderToStaticMarkup(
+    await EventDetail({
+      params: Promise.resolve({ id: "7" }),
+      searchParams: Promise.resolve({ section: "points", page: "21" }),
+    }),
+  );
+
+  expect(html).toContain('aria-label="Select points list page"');
+  expect(html).toContain("of 21");
+  expect(eventPointRanges).toEqual([[120, 125]]);
+  expect(
+    eventRelatedOrderCalls.filter(([table]) => table === "point_transactions"),
+  ).toEqual([
+    ["point_transactions", "created_at"],
+    ["point_transactions", "id"],
+  ]);
+});
+
+it.each(["0", "invalid", "99"])(
+  "redirects noncanonical Event page %s to the effective URL",
+  async (page) => {
+    vi.mocked(redirect).mockClear();
+    eventRosterCount = 8;
+
+    await EventDetail({
+      params: Promise.resolve({ id: "7" }),
+      searchParams: Promise.resolve({
+        section: "roster",
+        page,
+        returnTo: "/events?status=past",
+      }),
+    });
+
+    expect(redirect).toHaveBeenCalledWith(
+      page === "99"
+        ? "/events/7?section=roster&page=2&returnTo=%2Fevents%3Fstatus%3Dpast"
+        : "/events/7?section=roster&returnTo=%2Fevents%3Fstatus%3Dpast",
+    );
+  },
+);
+
+it("keeps a valid Event page URL canonical", async () => {
+  vi.mocked(redirect).mockClear();
+  eventRosterCount = 8;
+
+  await EventDetail({
+    params: Promise.resolve({ id: "7" }),
+    searchParams: Promise.resolve({ section: "roster", page: "2" }),
+  });
+
+  expect(redirect).not.toHaveBeenCalled();
 });
 
 it("retains Officer operational sections and full point history", async () => {
