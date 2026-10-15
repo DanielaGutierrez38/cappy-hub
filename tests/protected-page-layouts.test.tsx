@@ -166,6 +166,7 @@ beforeEach(() => {
         gte: () => query,
         in: () => query,
         is: () => query,
+        neq: () => query,
         not: () => query,
         lt: () => query,
         lte: () => query,
