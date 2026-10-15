@@ -42,6 +42,13 @@ type ActionPresentationKind =
   | "task-completed"
   | "task-approved"
   | "officer-role-changed"
+  | "presenter-claimed"
+  | "presenter-released"
+  | "presenter-assigned"
+  | "presenter-unassigned"
+  | "presenter-slot-added"
+  | "presenter-slot-removed"
+  | "presenter-slots-reordered"
   | "points"
   | "warning";
 
@@ -158,6 +165,35 @@ const actionPresentations: Record<string, ActionPresentation> = {
   "position.reactivated": { label: "Reactivated a position" },
   "position.retired": { label: "Retired a position" },
   "position.renamed": { label: "Renamed a position" },
+  "presentation.assigned": {
+    label: "Assigned a presenter",
+    kind: "presenter-assigned",
+  },
+  "presentation.claimed": {
+    label: "Volunteered to present",
+    kind: "presenter-claimed",
+  },
+  "presentation.details_updated": { label: "Updated presenter slot details" },
+  "presentation.slot_added": {
+    label: "Added a presenter slot",
+    kind: "presenter-slot-added",
+  },
+  "presentation.slot_removed": {
+    label: "Removed a presenter slot",
+    kind: "presenter-slot-removed",
+  },
+  "presentation.released": {
+    label: "Stepped down as presenter",
+    kind: "presenter-released",
+  },
+  "presentation.slots_reordered": {
+    label: "Reordered presenter slots",
+    kind: "presenter-slots-reordered",
+  },
+  "presentation.unassigned": {
+    label: "Removed a presenter",
+    kind: "presenter-unassigned",
+  },
   "branch.reactivated": { label: "Reactivated a branch" },
   "branch.retired": { label: "Retired a branch" },
   "task.approved": {
@@ -252,6 +288,10 @@ const fieldLabels: Record<string, string> = {
   old_rate: "Participation rate",
   points: "Points",
   position_id: "Position",
+  prep_notes: "Prep notes",
+  presentation_title: "Presentation topic",
+  resource_url: "Resource link",
+  difficulty: "Difficulty",
   rate: "Participation rate",
   reason: "Reason",
   slides_url: "Slides link",
@@ -275,6 +315,7 @@ const hiddenChangeFields = new Set([
   "task_id",
   "auth_user_id",
   "request_key",
+  "slot_id",
   "revision",
 ]);
 
@@ -282,6 +323,14 @@ function asObject(value: unknown): AuditObject | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as AuditObject)
     : undefined;
+}
+
+function readNumber(source: AuditObject | undefined, keys: string[]) {
+  for (const key of keys) {
+    const value = source?.[key];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+  }
+  return undefined;
 }
 
 function readString(source: AuditObject | undefined, keys: string[]) {
@@ -411,6 +460,32 @@ function summarizeChanges(details: AuditObject | undefined) {
   return [];
 }
 
+function presenterSlotSummary(detail: AuditObject | undefined) {
+  const position = readNumber(detail, ["position"]);
+  const title = readString(detail, ["presentation_title"]);
+  const difficulty = readString(detail, ["difficulty"]);
+  const parts = [position ? `Slot ${position}` : "Presenter slot"];
+  if (title) parts.push(title);
+  if (difficulty) parts.push(`Difficulty: ${difficulty}`);
+  const reason = presenterSlotReasons[readString(detail, ["reason"]) ?? ""];
+  if (reason) parts.push(reason);
+  return parts.join(" · ");
+}
+
+function presenterSlotActivity(detail: AuditObject | undefined) {
+  const position = readNumber(detail, ["position"]);
+  const title = readString(detail, ["presentation_title"]);
+  const difficulty = readString(detail, ["difficulty"]);
+  const label =
+    title ?? (position ? `slot ${position}` : "a presentation slot");
+  return difficulty ? `${label} (${difficulty})` : label;
+}
+
+const presenterSlotReasons: Record<string, string> = {
+  signup_removed: "Event signup removed",
+  officer_deactivated: "Officer deactivated",
+};
+
 function sentenceFor(
   presentation: ActionPresentation | undefined,
   detail: AuditObject | undefined,
@@ -438,6 +513,22 @@ function sentenceFor(
       if (names.length > 0)
         return `Added ${names.slice(0, 3).join(", ")}${names.length > 3 ? ` and ${names.length - 3} others` : ""} to ${recordName}`;
       return `${presentation.label} (${ids.length} ${ids.length === 1 ? "officer" : "officers"})`;
+    }
+    case "presenter-claimed":
+      return `${personName} volunteered for ${presenterSlotActivity(detail)} at ${recordName}`;
+    case "presenter-released":
+      return `${personName} released ${presenterSlotActivity(detail)} at ${recordName}`;
+    case "presenter-assigned":
+      return `Assigned ${personName} to ${presenterSlotActivity(detail)} at ${recordName}`;
+    case "presenter-unassigned":
+      return `Removed ${personName} from ${presenterSlotActivity(detail)} at ${recordName}`;
+    case "presenter-slot-added": {
+      const position = readNumber(detail, ["position"]);
+      return `Added presenter slot${position ? ` ${position}` : ""} at ${recordName}`;
+    }
+    case "presenter-slot-removed": {
+      const position = readNumber(detail, ["position"]);
+      return `Removed presenter slot${position ? ` ${position}` : ""} from ${recordName}`;
     }
     case "task-assigned":
       return `Assigned ${personName} to ${recordName}`;
@@ -498,6 +589,17 @@ function detailSummaryFor(
       return `Completed by ${officerName ?? "Officer"}`;
     case "task-approved":
       return `Approved for ${officerName ?? "Officer"}`;
+    case "presenter-claimed":
+    case "presenter-released":
+    case "presenter-assigned":
+    case "presenter-unassigned":
+    case "presenter-slot-added":
+    case "presenter-slot-removed":
+      return presenterSlotSummary(details);
+    case "presenter-slots-reordered":
+      return Array.isArray(details?.slot_ids)
+        ? `${details.slot_ids.length} slots reordered`
+        : fallback;
     case "event-officers-bulk-added":
       if (Array.isArray(details?.officer_ids))
         return `${details.officer_ids.length} ${details.officer_ids.length === 1 ? "officer" : "officers"} added`;

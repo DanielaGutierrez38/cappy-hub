@@ -715,6 +715,71 @@ export type Database = {
         };
         Relationships: [];
       };
+      presentation_slots: {
+        Row: {
+          created_at: string;
+          difficulty: string | null;
+          event_id: number;
+          id: number;
+          officer_id: number | null;
+          position: number;
+          prep_notes: string | null;
+          presentation_title: string | null;
+          resource_url: string | null;
+        };
+        Insert: {
+          created_at?: string;
+          difficulty?: string | null;
+          event_id: number;
+          id?: number;
+          officer_id?: number | null;
+          position: number;
+          prep_notes?: string | null;
+          presentation_title?: string | null;
+          resource_url?: string | null;
+        };
+        Update: {
+          created_at?: string;
+          difficulty?: string | null;
+          event_id?: number;
+          id?: number;
+          officer_id?: number | null;
+          position?: number;
+          prep_notes?: string | null;
+          presentation_title?: string | null;
+          resource_url?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "presentation_slots_event_id_fkey";
+            columns: ["event_id"];
+            isOneToOne: false;
+            referencedRelation: "events";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "presentation_slots_officer_id_fkey";
+            columns: ["officer_id"];
+            isOneToOne: false;
+            referencedRelation: "officer_point_totals";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "presentation_slots_officer_id_fkey";
+            columns: ["officer_id"];
+            isOneToOne: false;
+            referencedRelation: "officers";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "presentation_slots_presenter_signup_fkey";
+            columns: ["event_id", "officer_id"];
+            isOneToOne: false;
+            referencedRelation: "event_officers";
+            referencedColumns: ["event_id", "officer_id"];
+          },
+        ];
+      };
       task_events: {
         Row: {
           created_at: string;
@@ -1163,6 +1228,7 @@ export type Database = {
         };
         Returns: undefined;
       };
+      add_presenter_slot: { Args: { p_event_id: number }; Returns: number };
       bulk_add_event_officers: {
         Args: { p_event_id: number; p_officer_ids: number[] };
         Returns: Json;
@@ -1174,6 +1240,10 @@ export type Database = {
       cancel_event: { Args: { p_event_id: number }; Returns: undefined };
       change_event_signup: {
         Args: { p_event_id: number; p_officer_id: number; p_remove?: boolean };
+        Returns: undefined;
+      };
+      change_presenter_slot: {
+        Args: { p_officer_id: number; p_release?: boolean; p_slot_id: number };
         Returns: undefined;
       };
       claim_current_officer_identity: {
@@ -1361,6 +1431,10 @@ export type Database = {
         Args: { p_transaction_id: number };
         Returns: boolean;
       };
+      remove_presenter_slot: {
+        Args: { p_slot_id: number };
+        Returns: undefined;
+      };
       remove_task: { Args: { p_task_id: number }; Returns: undefined };
       remove_task_assignment: {
         Args: { p_officer_id: number; p_task_id: number };
@@ -1380,6 +1454,10 @@ export type Database = {
       };
       rename_position: {
         Args: { p_id: number; p_name: string };
+        Returns: undefined;
+      };
+      reorder_presenter_slots: {
+        Args: { p_event_id: number; p_slot_ids: number[] };
         Returns: undefined;
       };
       restore_event: { Args: { p_event_id: number }; Returns: undefined };
@@ -1501,6 +1579,16 @@ export type Database = {
       };
       update_point_transaction: {
         Args: { p_points: number; p_transaction_id: number };
+        Returns: undefined;
+      };
+      update_presenter_slot_details: {
+        Args: {
+          p_difficulty: string;
+          p_notes: string;
+          p_slot_id: number;
+          p_title: string;
+          p_url: string;
+        };
         Returns: undefined;
       };
       update_task_details: {

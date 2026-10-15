@@ -136,6 +136,11 @@ select ok(not exists(select 1 from pg_catalog.pg_proc p
       ,'public.create_event_location(text)'::regprocedure
       ,'public.rename_event_location(bigint,text)'::regprocedure
       ,'public.delete_event_location(bigint)'::regprocedure
+      ,'public.add_presenter_slot(bigint)'::regprocedure
+      ,'public.reorder_presenter_slots(bigint,bigint[])'::regprocedure
+      ,'public.remove_presenter_slot(bigint)'::regprocedure
+      ,'public.change_presenter_slot(bigint,bigint,boolean)'::regprocedure
+      ,'public.update_presenter_slot_details(bigint,text,text,text,text)'::regprocedure
       ,'public.set_branch_active(bigint,boolean)'::regprocedure
       ,'public.set_position_active(bigint,boolean)'::regprocedure
       ,'public.event_signup_counts()'::regprocedure
