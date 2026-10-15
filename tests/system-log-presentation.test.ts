@@ -360,3 +360,78 @@ it("uses a safe fallback for unknown legacy actions and unfamiliar payloads", ()
   expect(result.detailSummary).toBe("Additional audit data recorded");
   expect(result.changes).toEqual([]);
 });
+
+it.each([
+  [
+    "presentation.claimed",
+    { officer_id: 42, difficulty: "easy" },
+    "Noel Lozano volunteered to present the easy problem at Arrays Workshop",
+    "Easy problem",
+  ],
+  [
+    "presentation.assigned",
+    { officer_id: 42, difficulty: "hard" },
+    "Assigned Noel Lozano to present the hard problem at Arrays Workshop",
+    "Hard problem",
+  ],
+  [
+    "presentation.released",
+    { officer_id: 42, difficulty: "medium", reason: "requested" },
+    "Noel Lozano stepped down from the medium problem at Arrays Workshop",
+    "Medium problem",
+  ],
+  [
+    "presentation.unassigned",
+    { officer_id: 42, difficulty: "easy", reason: "signup_removed" },
+    "Removed Noel Lozano from the easy problem at Arrays Workshop",
+    "Easy problem · Event signup removed",
+  ],
+  [
+    "presentation.slots_updated",
+    { previous_difficulties: [], difficulties: ["easy", "hard"] },
+    "Changed presenter slots · Arrays Workshop",
+    "Slots: Easy, Hard",
+  ],
+])(
+  "presents %s activity with the Officer, difficulty and Event",
+  (action, details, activity, summary) => {
+    const result = presentAuditEntry(
+      { action, entity_type: "event", entity_id: 123, details },
+      {
+        officerNames: new Map([[42, "Noel Lozano"]]),
+        eventNames: new Map([[123, "Arrays Workshop"]]),
+        availableEventIds: new Set([123]),
+      },
+    );
+
+    expect(result.activity).toBe(activity);
+    expect(result.record).toEqual({
+      label: "Arrays Workshop",
+      href: "/events/123",
+    });
+    expect(result.detailSummary).toBe(summary);
+  },
+);
+
+it("shows which presenter slot details changed", () => {
+  const result = presentAuditEntry({
+    action: "presentation.details_updated",
+    entity_type: "event",
+    entity_id: 123,
+    details: {
+      slot_id: 7,
+      difficulty: "easy",
+      before: { problem_title: null, problem_url: null, prep_notes: null },
+      after: {
+        problem_title: "Two Sum",
+        problem_url: "https://example.org/two-sum",
+        prep_notes: null,
+      },
+    },
+  });
+
+  expect(result.changes).toEqual([
+    { label: "Problem", value: "none → Two Sum" },
+    { label: "Problem link", value: "none → https://example.org/two-sum" },
+  ]);
+});

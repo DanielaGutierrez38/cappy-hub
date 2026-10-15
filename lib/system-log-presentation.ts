@@ -42,6 +42,11 @@ type ActionPresentationKind =
   | "task-completed"
   | "task-approved"
   | "officer-role-changed"
+  | "presenter-claimed"
+  | "presenter-released"
+  | "presenter-assigned"
+  | "presenter-unassigned"
+  | "presenter-slots-updated"
   | "points"
   | "warning";
 
@@ -158,6 +163,27 @@ const actionPresentations: Record<string, ActionPresentation> = {
   "position.reactivated": { label: "Reactivated a position" },
   "position.retired": { label: "Retired a position" },
   "position.renamed": { label: "Renamed a position" },
+  "presentation.assigned": {
+    label: "Assigned a presenter",
+    kind: "presenter-assigned",
+  },
+  "presentation.claimed": {
+    label: "Volunteered to present",
+    kind: "presenter-claimed",
+  },
+  "presentation.details_updated": { label: "Updated presenter slot details" },
+  "presentation.released": {
+    label: "Stepped down as presenter",
+    kind: "presenter-released",
+  },
+  "presentation.slots_updated": {
+    label: "Changed presenter slots",
+    kind: "presenter-slots-updated",
+  },
+  "presentation.unassigned": {
+    label: "Removed a presenter",
+    kind: "presenter-unassigned",
+  },
   "branch.reactivated": { label: "Reactivated a branch" },
   "branch.retired": { label: "Retired a branch" },
   "task.approved": {
@@ -252,6 +278,9 @@ const fieldLabels: Record<string, string> = {
   old_rate: "Participation rate",
   points: "Points",
   position_id: "Position",
+  prep_notes: "Prep notes",
+  problem_title: "Problem",
+  problem_url: "Problem link",
   rate: "Participation rate",
   reason: "Reason",
   slides_url: "Slides link",
@@ -275,6 +304,7 @@ const hiddenChangeFields = new Set([
   "task_id",
   "auth_user_id",
   "request_key",
+  "slot_id",
   "revision",
 ]);
 
@@ -411,6 +441,24 @@ function summarizeChanges(details: AuditObject | undefined) {
   return [];
 }
 
+function difficultyLabel(detail: AuditObject | undefined) {
+  const difficulty = readString(detail, ["difficulty"]);
+  return difficulty ? formatLabel(difficulty).toLowerCase() : "a";
+}
+
+const presenterSlotReasons: Record<string, string> = {
+  signup_removed: "Event signup removed",
+  officer_deactivated: "Officer deactivated",
+};
+
+function presenterSlotSummary(detail: AuditObject | undefined) {
+  const difficulty = readString(detail, ["difficulty"]);
+  const slot = difficulty ? `${formatLabel(difficulty)} problem` : "Problem";
+  const reason =
+    presenterSlotReasons[readString(detail, ["reason"]) ?? ""] ?? undefined;
+  return reason ? `${slot} · ${reason}` : slot;
+}
+
 function sentenceFor(
   presentation: ActionPresentation | undefined,
   detail: AuditObject | undefined,
@@ -439,6 +487,14 @@ function sentenceFor(
         return `Added ${names.slice(0, 3).join(", ")}${names.length > 3 ? ` and ${names.length - 3} others` : ""} to ${recordName}`;
       return `${presentation.label} (${ids.length} ${ids.length === 1 ? "officer" : "officers"})`;
     }
+    case "presenter-claimed":
+      return `${personName} volunteered to present the ${difficultyLabel(detail)} problem at ${recordName}`;
+    case "presenter-released":
+      return `${personName} stepped down from the ${difficultyLabel(detail)} problem at ${recordName}`;
+    case "presenter-assigned":
+      return `Assigned ${personName} to present the ${difficultyLabel(detail)} problem at ${recordName}`;
+    case "presenter-unassigned":
+      return `Removed ${personName} from the ${difficultyLabel(detail)} problem at ${recordName}`;
     case "task-assigned":
       return `Assigned ${personName} to ${recordName}`;
     case "task-officer-added":
@@ -498,6 +554,16 @@ function detailSummaryFor(
       return `Completed by ${officerName ?? "Officer"}`;
     case "task-approved":
       return `Approved for ${officerName ?? "Officer"}`;
+    case "presenter-claimed":
+    case "presenter-released":
+    case "presenter-assigned":
+    case "presenter-unassigned":
+      return presenterSlotSummary(details);
+    case "presenter-slots-updated":
+      if (!Array.isArray(details?.difficulties)) return fallback;
+      return details.difficulties.length > 0
+        ? `Slots: ${details.difficulties.map((difficulty) => formatLabel(String(difficulty))).join(", ")}`
+        : "No presenter slots";
     case "event-officers-bulk-added":
       if (Array.isArray(details?.officer_ids))
         return `${details.officer_ids.length} ${details.officer_ids.length === 1 ? "officer" : "officers"} added`;

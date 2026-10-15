@@ -120,6 +120,16 @@ values
   (-2017, -1001), (-2017, -1002), (-2017, -1003), (-2017, -1004),
   (-2018, -1007), (-2018, -1017), (-2018, -1018), (-2018, -1024);
 
+-- Presenters must be signed up for the Event above; a null officer is an open slot.
+insert into public.presentation_slots
+  (id, event_id, difficulty, officer_id, problem_title, problem_url, prep_notes)
+values
+  (-9001, -2010, 'easy', -1013, 'Mock: Two Sum', 'https://example.org/problems/two-sum', 'Walk through the hash map approach.'),
+  (-9002, -2010, 'medium', null, 'Mock: Group Anagrams', 'https://example.org/problems/group-anagrams', null),
+  (-9003, -2010, 'hard', null, null, null, null),
+  (-9004, -2013, 'medium', -1016, 'Mock: Coin Change', 'https://example.org/problems/coin-change', null),
+  (-9005, -2013, 'hard', null, null, null, null);
+
 insert into public.point_transactions
   (id, officer_id, event_id, points, reason, award_type, created_at, removed_at, removed_by)
 values
