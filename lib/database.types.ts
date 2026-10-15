@@ -718,33 +718,36 @@ export type Database = {
       presentation_slots: {
         Row: {
           created_at: string;
-          difficulty: string;
+          difficulty: string | null;
           event_id: number;
           id: number;
           officer_id: number | null;
+          position: number;
           prep_notes: string | null;
-          problem_title: string | null;
-          problem_url: string | null;
+          presentation_title: string | null;
+          resource_url: string | null;
         };
         Insert: {
           created_at?: string;
-          difficulty: string;
+          difficulty?: string | null;
           event_id: number;
           id?: number;
           officer_id?: number | null;
+          position: number;
           prep_notes?: string | null;
-          problem_title?: string | null;
-          problem_url?: string | null;
+          presentation_title?: string | null;
+          resource_url?: string | null;
         };
         Update: {
           created_at?: string;
-          difficulty?: string;
+          difficulty?: string | null;
           event_id?: number;
           id?: number;
           officer_id?: number | null;
+          position?: number;
           prep_notes?: string | null;
-          problem_title?: string | null;
-          problem_url?: string | null;
+          presentation_title?: string | null;
+          resource_url?: string | null;
         };
         Relationships: [
           {
@@ -1225,6 +1228,7 @@ export type Database = {
         };
         Returns: undefined;
       };
+      add_presenter_slot: { Args: { p_event_id: number }; Returns: number };
       bulk_add_event_officers: {
         Args: { p_event_id: number; p_officer_ids: number[] };
         Returns: Json;
@@ -1239,12 +1243,7 @@ export type Database = {
         Returns: undefined;
       };
       change_presenter_slot: {
-        Args: {
-          p_difficulty: string;
-          p_event_id: number;
-          p_officer_id: number;
-          p_release?: boolean;
-        };
+        Args: { p_officer_id: number; p_release?: boolean; p_slot_id: number };
         Returns: undefined;
       };
       claim_current_officer_identity: {
@@ -1432,6 +1431,10 @@ export type Database = {
         Args: { p_transaction_id: number };
         Returns: boolean;
       };
+      remove_presenter_slot: {
+        Args: { p_slot_id: number };
+        Returns: undefined;
+      };
       remove_task: { Args: { p_task_id: number }; Returns: undefined };
       remove_task_assignment: {
         Args: { p_officer_id: number; p_task_id: number };
@@ -1451,6 +1454,10 @@ export type Database = {
       };
       rename_position: {
         Args: { p_id: number; p_name: string };
+        Returns: undefined;
+      };
+      reorder_presenter_slots: {
+        Args: { p_event_id: number; p_slot_ids: number[] };
         Returns: undefined;
       };
       restore_event: { Args: { p_event_id: number }; Returns: undefined };
@@ -1562,10 +1569,6 @@ export type Database = {
         Args: { p_id: number; p_is_active: boolean };
         Returns: undefined;
       };
-      set_presenter_slots: {
-        Args: { p_difficulties: string[]; p_event_id: number };
-        Returns: undefined;
-      };
       set_task_assignment_completion: {
         Args: { p_completed: boolean; p_officer_id: number; p_task_id: number };
         Returns: undefined;
@@ -1580,10 +1583,11 @@ export type Database = {
       };
       update_presenter_slot_details: {
         Args: {
-          p_prep_notes: string;
-          p_problem_title: string;
-          p_problem_url: string;
+          p_difficulty: string;
+          p_notes: string;
           p_slot_id: number;
+          p_title: string;
+          p_url: string;
         };
         Returns: undefined;
       };

@@ -46,7 +46,9 @@ type ActionPresentationKind =
   | "presenter-released"
   | "presenter-assigned"
   | "presenter-unassigned"
-  | "presenter-slots-updated"
+  | "presenter-slot-added"
+  | "presenter-slot-removed"
+  | "presenter-slots-reordered"
   | "points"
   | "warning";
 
@@ -172,13 +174,21 @@ const actionPresentations: Record<string, ActionPresentation> = {
     kind: "presenter-claimed",
   },
   "presentation.details_updated": { label: "Updated presenter slot details" },
+  "presentation.slot_added": {
+    label: "Added a presenter slot",
+    kind: "presenter-slot-added",
+  },
+  "presentation.slot_removed": {
+    label: "Removed a presenter slot",
+    kind: "presenter-slot-removed",
+  },
   "presentation.released": {
     label: "Stepped down as presenter",
     kind: "presenter-released",
   },
-  "presentation.slots_updated": {
-    label: "Changed presenter slots",
-    kind: "presenter-slots-updated",
+  "presentation.slots_reordered": {
+    label: "Reordered presenter slots",
+    kind: "presenter-slots-reordered",
   },
   "presentation.unassigned": {
     label: "Removed a presenter",
@@ -279,8 +289,9 @@ const fieldLabels: Record<string, string> = {
   points: "Points",
   position_id: "Position",
   prep_notes: "Prep notes",
-  problem_title: "Problem",
-  problem_url: "Problem link",
+  presentation_title: "Presentation topic",
+  resource_url: "Resource link",
+  difficulty: "Difficulty",
   rate: "Participation rate",
   reason: "Reason",
   slides_url: "Slides link",
@@ -312,6 +323,14 @@ function asObject(value: unknown): AuditObject | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as AuditObject)
     : undefined;
+}
+
+function readNumber(source: AuditObject | undefined, keys: string[]) {
+  for (const key of keys) {
+    const value = source?.[key];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+  }
+  return undefined;
 }
 
 function readString(source: AuditObject | undefined, keys: string[]) {
@@ -441,23 +460,31 @@ function summarizeChanges(details: AuditObject | undefined) {
   return [];
 }
 
-function difficultyLabel(detail: AuditObject | undefined) {
+function presenterSlotSummary(detail: AuditObject | undefined) {
+  const position = readNumber(detail, ["position"]);
+  const title = readString(detail, ["presentation_title"]);
   const difficulty = readString(detail, ["difficulty"]);
-  return difficulty ? formatLabel(difficulty).toLowerCase() : "a";
+  const parts = [position ? `Slot ${position}` : "Presenter slot"];
+  if (title) parts.push(title);
+  if (difficulty) parts.push(`Difficulty: ${difficulty}`);
+  const reason = presenterSlotReasons[readString(detail, ["reason"]) ?? ""];
+  if (reason) parts.push(reason);
+  return parts.join(" · ");
+}
+
+function presenterSlotActivity(detail: AuditObject | undefined) {
+  const position = readNumber(detail, ["position"]);
+  const title = readString(detail, ["presentation_title"]);
+  const difficulty = readString(detail, ["difficulty"]);
+  const label =
+    title ?? (position ? `slot ${position}` : "a presentation slot");
+  return difficulty ? `${label} (${difficulty})` : label;
 }
 
 const presenterSlotReasons: Record<string, string> = {
   signup_removed: "Event signup removed",
   officer_deactivated: "Officer deactivated",
 };
-
-function presenterSlotSummary(detail: AuditObject | undefined) {
-  const difficulty = readString(detail, ["difficulty"]);
-  const slot = difficulty ? `${formatLabel(difficulty)} problem` : "Problem";
-  const reason =
-    presenterSlotReasons[readString(detail, ["reason"]) ?? ""] ?? undefined;
-  return reason ? `${slot} · ${reason}` : slot;
-}
 
 function sentenceFor(
   presentation: ActionPresentation | undefined,
@@ -488,13 +515,21 @@ function sentenceFor(
       return `${presentation.label} (${ids.length} ${ids.length === 1 ? "officer" : "officers"})`;
     }
     case "presenter-claimed":
-      return `${personName} volunteered to present the ${difficultyLabel(detail)} problem at ${recordName}`;
+      return `${personName} volunteered for ${presenterSlotActivity(detail)} at ${recordName}`;
     case "presenter-released":
-      return `${personName} stepped down from the ${difficultyLabel(detail)} problem at ${recordName}`;
+      return `${personName} released ${presenterSlotActivity(detail)} at ${recordName}`;
     case "presenter-assigned":
-      return `Assigned ${personName} to present the ${difficultyLabel(detail)} problem at ${recordName}`;
+      return `Assigned ${personName} to ${presenterSlotActivity(detail)} at ${recordName}`;
     case "presenter-unassigned":
-      return `Removed ${personName} from the ${difficultyLabel(detail)} problem at ${recordName}`;
+      return `Removed ${personName} from ${presenterSlotActivity(detail)} at ${recordName}`;
+    case "presenter-slot-added": {
+      const position = readNumber(detail, ["position"]);
+      return `Added presenter slot${position ? ` ${position}` : ""} at ${recordName}`;
+    }
+    case "presenter-slot-removed": {
+      const position = readNumber(detail, ["position"]);
+      return `Removed presenter slot${position ? ` ${position}` : ""} from ${recordName}`;
+    }
     case "task-assigned":
       return `Assigned ${personName} to ${recordName}`;
     case "task-officer-added":
@@ -558,12 +593,13 @@ function detailSummaryFor(
     case "presenter-released":
     case "presenter-assigned":
     case "presenter-unassigned":
+    case "presenter-slot-added":
+    case "presenter-slot-removed":
       return presenterSlotSummary(details);
-    case "presenter-slots-updated":
-      if (!Array.isArray(details?.difficulties)) return fallback;
-      return details.difficulties.length > 0
-        ? `Slots: ${details.difficulties.map((difficulty) => formatLabel(String(difficulty))).join(", ")}`
-        : "No presenter slots";
+    case "presenter-slots-reordered":
+      return Array.isArray(details?.slot_ids)
+        ? `${details.slot_ids.length} slots reordered`
+        : fallback;
     case "event-officers-bulk-added":
       if (Array.isArray(details?.officer_ids))
         return `${details.officer_ids.length} ${details.officer_ids.length === 1 ? "officer" : "officers"} added`;

@@ -364,36 +364,41 @@ it("uses a safe fallback for unknown legacy actions and unfamiliar payloads", ()
 it.each([
   [
     "presentation.claimed",
-    { officer_id: 42, difficulty: "easy" },
-    "Noel Lozano volunteered to present the easy problem at Arrays Workshop",
-    "Easy problem",
+    { officer_id: 42, slot_id: 7, position: 3, difficulty: "Medium" },
+    "Noel Lozano volunteered for slot 3 (Medium) at Arrays Workshop",
+    "Slot 3 · Difficulty: Medium",
   ],
   [
     "presentation.assigned",
-    { officer_id: 42, difficulty: "hard" },
-    "Assigned Noel Lozano to present the hard problem at Arrays Workshop",
-    "Hard problem",
+    {
+      officer_id: 42,
+      slot_id: 8,
+      position: 2,
+      presentation_title: "Interview prep",
+    },
+    "Assigned Noel Lozano to Interview prep at Arrays Workshop",
+    "Slot 2 · Interview prep",
   ],
   [
     "presentation.released",
-    { officer_id: 42, difficulty: "medium", reason: "requested" },
-    "Noel Lozano stepped down from the medium problem at Arrays Workshop",
-    "Medium problem",
+    {
+      officer_id: 42,
+      slot_id: 7,
+      position: 3,
+      difficulty: "Nightmare",
+      reason: "requested",
+    },
+    "Noel Lozano released slot 3 (Nightmare) at Arrays Workshop",
+    "Slot 3 · Difficulty: Nightmare",
   ],
   [
     "presentation.unassigned",
-    { officer_id: 42, difficulty: "easy", reason: "signup_removed" },
-    "Removed Noel Lozano from the easy problem at Arrays Workshop",
-    "Easy problem · Event signup removed",
-  ],
-  [
-    "presentation.slots_updated",
-    { previous_difficulties: [], difficulties: ["easy", "hard"] },
-    "Changed presenter slots · Arrays Workshop",
-    "Slots: Easy, Hard",
+    { officer_id: 42, slot_id: 7, position: 3, reason: "signup_removed" },
+    "Removed Noel Lozano from slot 3 at Arrays Workshop",
+    "Slot 3 · Event signup removed",
   ],
 ])(
-  "presents %s activity with the Officer, difficulty and Event",
+  "presents %s activity with the Officer, slot and Event",
   (action, details, activity, summary) => {
     const result = presentAuditEntry(
       { action, entity_type: "event", entity_id: 123, details },
@@ -413,25 +418,67 @@ it.each([
   },
 );
 
-it("shows which presenter slot details changed", () => {
+it("shows revised presentation fields in the System Log", () => {
   const result = presentAuditEntry({
     action: "presentation.details_updated",
     entity_type: "event",
     entity_id: 123,
     details: {
       slot_id: 7,
-      difficulty: "easy",
-      before: { problem_title: null, problem_url: null, prep_notes: null },
+      position: 3,
+      before: {
+        presentation_title: null,
+        resource_url: null,
+        difficulty: null,
+        prep_notes: null,
+      },
       after: {
-        problem_title: "Two Sum",
-        problem_url: "https://example.org/two-sum",
+        presentation_title: "Two Sum",
+        resource_url: "https://example.org/two-sum",
+        difficulty: "Easy",
         prep_notes: null,
       },
     },
   });
 
   expect(result.changes).toEqual([
-    { label: "Problem", value: "none → Two Sum" },
-    { label: "Problem link", value: "none → https://example.org/two-sum" },
+    { label: "Presentation topic", value: "none → Two Sum" },
+    { label: "Resource link", value: "none → https://example.org/two-sum" },
+    { label: "Difficulty", value: "none → Easy" },
   ]);
 });
+
+it.each([
+  [
+    "presentation.slot_added",
+    { slot_id: 7, position: 2 },
+    "Added presenter slot 2 at Arrays Workshop",
+    "Slot 2",
+  ],
+  [
+    "presentation.slot_removed",
+    { slot_id: 7, position: 2 },
+    "Removed presenter slot 2 from Arrays Workshop",
+    "Slot 2",
+  ],
+  [
+    "presentation.slots_reordered",
+    { slot_ids: [7, 8, 9] },
+    "Reordered presenter slots · Arrays Workshop",
+    "3 slots reordered",
+  ],
+])(
+  "presents %s slot configuration audit",
+  (action, details, activity, summary) => {
+    const result = presentAuditEntry(
+      { action, entity_type: "event", entity_id: 123, details },
+      {
+        eventNames: new Map([[123, "Arrays Workshop"]]),
+        availableEventIds: new Set([123]),
+      },
+    );
+
+    expect(result.activity).toBe(activity);
+    expect(result.detailSummary).toBe(summary);
+  },
+);
